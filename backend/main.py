@@ -53,3 +53,8 @@ app.include_router(chat.router, prefix="/chat", tags=["chat"])
 def health_check():
     """Liveness probe. Kubernetes (and you) can ping this to confirm the server is up."""
     return {"status": "ok", "version": "0.1.0"}
+
+@app.get("/", tags=["ops"])
+def read_root():
+    """Silence the internet scanners hitting the root URL."""
+    return {"message": "Ava API is online. Direct traffic to /chat/stream."}
