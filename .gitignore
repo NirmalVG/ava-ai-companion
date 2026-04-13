@@ -1,0 +1,67 @@
+# =========================
+# Operating System & IDEs
+# =========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+# Environment Variables (CRITICAL)
+# =========================
+# Never commit your Groq keys or other secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+backend/.env
+backend/.env.local
+frontend/.env.local
+
+# =========================
+# Backend (Python / FastAPI)
+# =========================
+# Virtual Environments
+backend/venv/
+venv/
+.venv/
+env/
+ENV/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest / Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local Databases (if you add SQLite later)
+*.sqlite3
+
+# =========================
+# Frontend (Next.js / Node)
+# =========================
+# Dependencies
+frontend/node_modules/
+node_modules/
+
+# Next.js build output
+frontend/.next/
+.next/
+out/
+build/
+
+# Vercel/Deployment caches
+.vercel/
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

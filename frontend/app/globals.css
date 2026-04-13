@@ -1,0 +1,126 @@
+@import "tailwindcss";
+
+@theme {
+  /* --- Design Tokens --- */
+  --color-bg-void: #06060a;
+  --color-bg-surface: #0e0e16;
+  --color-bg-elevated: #14141f;
+  --color-bg-border: #1e1e2e;
+
+  --color-amber-glow: #e8b86d;
+  --color-amber-dim: #a07840;
+  --color-amber-trace: rgba(232, 184, 109, 0.1);
+
+  --color-user-blue: #7b9cff;
+  --color-user-surface: #0f1628;
+
+  --color-text-primary: #e8e8f0;
+  --color-text-secondary: #8888a0;
+  --color-text-muted: #44445a;
+
+  /* --- Keyframes & Animations --- */
+  @keyframes cursor-blink {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0;
+    }
+  }
+  @keyframes message-in {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  --animate-cursor: cursor-blink 0.8s ease-in-out infinite;
+  --animate-message-in: message-in 0.25s ease-out forwards;
+}
+
+/* --- Base Reset & Global Styles --- */
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    height: 100%;
+    background-color: var(--color-bg-void);
+    color: var(--color-text-primary);
+    font-family: var(--font-mono), ui-monospace, monospace;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* --- Scrollbar --- */
+  ::-webkit-scrollbar {
+    width: 4px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-bg-border);
+    border-radius: 2px;
+  }
+}
+
+/* --- Custom Utilities --- */
+@layer utilities {
+  /* The blinking cursor for Ava's response */
+  .streaming-cursor::after {
+    content: "▋";
+    color: var(--color-amber-glow);
+    animation: var(--animate-cursor);
+    margin-left: 1px;
+    font-size: 0.85em;
+  }
+
+  .message-enter {
+    animation: var(--animate-message-in);
+  }
+
+  /* Ambient Background */
+  .ambient-bg {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(
+        ellipse 600px 400px at 0% 0%,
+        rgba(232, 184, 109, 0.03) 0%,
+        transparent 70%
+      ),
+      radial-gradient(
+        ellipse 400px 600px at 100% 100%,
+        rgba(123, 156, 255, 0.02) 0%,
+        transparent 70%
+      );
+    z-index: 0;
+  }
+
+  /* Glass Input Utility */
+  .glass-input {
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-bg-border);
+    transition:
+      border-color 0.2s ease,
+      box-shadow 0.2s ease;
+
+    &:focus-within {
+      border-color: var(--color-amber-dim);
+      box-shadow:
+        0 0 0 1px var(--color-amber-dim),
+        0 0 20px var(--color-amber-trace);
+      outline: none;
+    }
+  }
+}
