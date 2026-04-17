@@ -2129,6 +2129,49 @@ body {
     letter-spacing: 0.08em;
   }
 }
+
+/* Markdown inside Ava messages */
+.message-ava-text p {
+  margin-bottom: 0.6em;
+}
+.message-ava-text p:last-child {
+  margin-bottom: 0;
+}
+.message-ava-text code {
+  background: var(--color-bg-void);
+  border: 1px solid var(--color-border-default);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 11px;
+  color: var(--color-teal);
+}
+.message-ava-text pre {
+  background: var(--color-bg-void);
+  border: 1px solid var(--color-border-default);
+  border-radius: 4px;
+  padding: 12px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+.message-ava-text pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--color-text-primary);
+}
+.message-ava-text ul,
+.message-ava-text ol {
+  padding-left: 20px;
+  margin: 6px 0;
+}
+.message-ava-text li {
+  margin-bottom: 3px;
+}
+.message-ava-text strong {
+  color: var(--color-text-primary);
+  font-weight: 700;
+}
+
 /* ---break---*/
 @theme inline {
   --font-heading: var(--font-sans);

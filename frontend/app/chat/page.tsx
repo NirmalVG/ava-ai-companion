@@ -19,6 +19,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import ReactMarkdown from "react-markdown"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 
@@ -354,7 +355,7 @@ function AvaMessage({ message }: { message: Message }) {
                 <span className="streaming-cursor" />
               </span>
             ) : (
-              message.content
+              <ReactMarkdown>{message.content}</ReactMarkdown>
             )}
           </div>
         )}
@@ -405,7 +406,9 @@ function EmptyState({
   return (
     <div className="chat-empty-state">
       <div className="chat-empty-state-mark">AVA</div>
-      <div className="chat-empty-state-copy">Awaiting command transmission.</div>
+      <div className="chat-empty-state-copy">
+        Awaiting command transmission.
+      </div>
       <div className="chat-empty-state-grid">
         {suggestions.map((s) => (
           <button

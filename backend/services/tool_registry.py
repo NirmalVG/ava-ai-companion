@@ -127,6 +127,40 @@ async def handle_calculate(expression: str) -> str:
         return json.dumps({"error": "Division by zero."})
     except Exception as e:
         return json.dumps({"error": f"Could not evaluate '{expression}': {str(e)}"})
+    
+async def handle_web_search(query: str) -> str:
+    """
+    Search the web using DuckDuckGo Instant Answer API.
+    Free, no API key required.
+    """
+    try:
+        url = "https://api.duckduckgo.com/"
+        params = {
+            "q": query,
+            "format": "json",
+            "no_redirect": "1",
+            "no_html": "1",
+            "skip_disambig": "1",
+        }
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+        # DuckDuckGo returns different result shapes depending on query type
+        abstract = data.get("AbstractText", "")
+        answer = data.get("Answer", "")
+        related = [r.get("Text", "") for r in data.get("RelatedTopics", [])[:3] if r.get("Text")]
+
+        result = {
+            "query": query,
+            "answer": answer or abstract or "No direct answer found.",
+            "related": related,
+            "source": data.get("AbstractSource", ""),
+        }
+        return json.dumps(result)
+    except Exception as e:
+        return json.dumps({"error": f"Search failed: {str(e)}"})
 
 
 # ─── Tool Schemas ─────────────────────────────────────────────────────────────
@@ -206,6 +240,28 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": (
+                "Search the web for current information, news, facts, or anything "
+                "that requires up-to-date knowledge. Use this when the user asks about "
+                "recent events, specific facts you're uncertain about, or anything "
+                "time-sensitive."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "A concise search query, e.g. 'latest iPhone model 2026'",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
@@ -217,4 +273,5 @@ TOOL_HANDLERS: dict[str, callable] = {
     "get_current_time": handle_get_current_time,
     "get_weather": handle_get_weather,
     "calculate": handle_calculate,
+    "web_search": handle_web_search,
 }
