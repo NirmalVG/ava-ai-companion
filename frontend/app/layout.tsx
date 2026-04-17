@@ -1,28 +1,33 @@
-import type { Metadata } from "next"
-import { DM_Serif_Display, IBM_Plex_Mono } from "next/font/google"
-import "./globals.css"
-
 /*
-  Typography strategy:
-  - DM Serif Display: Ava's name/identity — elegant, intelligent, not a tech cliché
-  - IBM Plex Mono: Chat messages — monospace feels precise and technical,
-    perfect for an AI that reasons through problems
+  app/layout.tsx — Root layout (Server Component)
+
+  Handles: HTML structure, fonts, metadata.
+  Delegates client-side shell (drawer state, context) to ShellProvider.
 */
-const dmSerifDisplay = DM_Serif_Display({
+
+import type { Metadata } from "next"
+import { Rajdhani, Space_Mono, Geist } from "next/font/google"
+import "./globals.css"
+import ShellProvider from "@/components/ShellProvider"
+import { cn } from "@/lib/utils";
+
+const geist = Geist({subsets:['latin'],variable:'--font-sans'});
+
+const rajdhani = Rajdhani({
   subsets: ["latin"],
-  weight: "400",
-  variable: "--font-display",
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-rajdhani",
 })
 
-const ibmPlexMono = IBM_Plex_Mono({
+const spaceMono = Space_Mono({
   subsets: ["latin"],
-  weight: ["300", "400", "500"],
-  variable: "--font-mono",
+  weight: ["400", "700"],
+  variable: "--font-space-mono",
 })
 
 export const metadata: Metadata = {
-  title: "Ava",
-  description: "AGI-level personal assistant",
+  title: "AVA — Adaptive Virtual Agent",
+  description: "AGI-level personal assistant command interface",
 }
 
 export default function RootLayout({
@@ -31,11 +36,10 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html
-      lang="en"
-      className={`${dmSerifDisplay.variable} ${ibmPlexMono.variable}`}
-    >
-      <body>{children}</body>
+    <html lang="en" className={cn(rajdhani.variable, spaceMono.variable, "font-sans", geist.variable)}>
+      <body>
+        <ShellProvider>{children}</ShellProvider>
+      </body>
     </html>
   )
 }
