@@ -4,7 +4,9 @@ const withPWA = withPWAInit({
   dest: "public",
   disable: process.env.NODE_ENV === "development", // Disable in dev to avoid caching issues
   register: true,
-  skipWaiting: true,
+  workboxOptions: {
+    skipWaiting: true,
+  },
 })
 
 /** @type {import('next').NextConfig} */
