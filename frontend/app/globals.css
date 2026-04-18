@@ -2172,6 +2172,26 @@ body {
   font-weight: 700;
 }
 
+.memory-delete-btn {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--color-border-default);
+  border-radius: 3px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.memory-delete-btn:hover {
+  border-color: var(--color-red);
+  color: var(--color-red);
+}
+
 /* ---break---*/
 @theme inline {
   --font-heading: var(--font-sans);
@@ -2295,4 +2315,109 @@ body {
   html {
     @apply font-sans;
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MARKDOWN RENDERING
+═══════════════════════════════════════════════════════════════ */
+.message-ava-text p {
+  margin-bottom: 0.65em;
+}
+.message-ava-text p:last-child {
+  margin-bottom: 0;
+}
+.message-ava-text h1,
+.message-ava-text h2,
+.message-ava-text h3 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--color-text-primary);
+  margin: 12px 0 6px;
+}
+.message-ava-text h1 {
+  font-size: 18px;
+}
+.message-ava-text h2 {
+  font-size: 15px;
+}
+.message-ava-text h3 {
+  font-size: 13px;
+}
+.message-ava-text ul,
+.message-ava-text ol {
+  padding-left: 18px;
+  margin: 6px 0;
+}
+.message-ava-text li {
+  margin-bottom: 4px;
+}
+.message-ava-text code {
+  background: var(--color-bg-void);
+  border: 1px solid var(--color-border-default);
+  border-radius: 3px;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--color-teal);
+}
+.message-ava-text pre {
+  background: var(--color-bg-void);
+  border: 1px solid var(--color-border-default);
+  border-radius: 5px;
+  padding: 14px;
+  overflow-x: auto;
+  margin: 10px 0;
+}
+.message-ava-text pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--color-text-primary);
+  font-size: 12px;
+}
+.message-ava-text strong {
+  color: var(--color-text-primary);
+  font-weight: 700;
+}
+.message-ava-text em {
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
+.message-ava-text blockquote {
+  border-left: 2px solid var(--color-teal-dim);
+  padding-left: 12px;
+  margin: 8px 0;
+  color: var(--color-text-secondary);
+}
+.message-ava-text a {
+  color: var(--color-teal);
+  text-decoration: none;
+}
+.message-ava-text a:hover {
+  text-decoration: underline;
+}
+.message-ava-text table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin: 10px 0;
+}
+.message-ava-text th {
+  text-align: left;
+  padding: 6px 10px;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-default);
+  color: var(--color-teal);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.message-ava-text td {
+  padding: 6px 10px;
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+}
+.message-ava-text tr:hover td {
+  background: var(--color-bg-elevated);
 }

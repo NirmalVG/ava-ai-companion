@@ -1,27 +1,12 @@
 "use client"
 
-/*
-  app/chat/page.tsx — The AVA COMMAND chat interface
-
-  Matches Image 1:
-  - Header: "AVA COMMAND" brand + LIVE SESSION / ARCHIVE tabs + search + icons
-  - Messages: user (purple bg) + ava (dark card with optional tool call block)
-  - Tool call block: function name + SUCCESS/PENDING badge + JSON payload
-  - Input: "SEND COMMAND..." textarea + mic icon + TRANSMIT button
-  - Empty state: centered prompt suggestions
-
-  SSE event types from backend:
-    {"type": "token",       "content": "..."}  → append text
-    {"type": "tool_start",  "name": "...", "args": {...}} → show tool step
-    {"type": "tool_result", "name": "...", "result": "..."} → resolve step
-    {"type": "error",       "content": "..."} → inline error
-*/
-
 import { useState, useRef, useEffect, useCallback } from "react"
-import { SidebarTrigger } from "@/components/ui/sidebar"
 import ReactMarkdown from "react-markdown"
+import { SidebarTrigger } from "@/components/ui/sidebar"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
+const USER_ID = "operator_01"
+const MEMORY_URL = `${API_BASE}/memory/conversation/${USER_ID}`
 
 // ─── Types ───────────────────────────────────────────────────────
 type Role = "user" | "ava"
@@ -45,6 +30,7 @@ interface Message {
 function uid() {
   return Math.random().toString(36).slice(2, 10)
 }
+
 function now() {
   return new Date().toLocaleTimeString("en-GB", {
     hour: "2-digit",
@@ -53,7 +39,6 @@ function now() {
   })
 }
 
-// ─── Suggestion prompts shown in empty state ──────────────────────
 const SUGGESTIONS = [
   "Schedule a 30-min call with Priya next Tuesday at 3pm",
   "What time is it in Tokyo right now?",
@@ -67,16 +52,42 @@ export default function ChatPage() {
   const [input, setInput] = useState("")
   const [isStreaming, setIsStreaming] = useState(false)
   const [activeTab, setActiveTab] = useState<"live" | "archive">("live")
+  const [historyLoading, setHistoryLoading] = useState(true)
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
-  // Auto-scroll to newest message
+  // ── Load conversation history on mount ───────────────────────
+  useEffect(() => {
+    async function loadHistory() {
+      try {
+        const res = await fetch(MEMORY_URL)
+        if (!res.ok) return
+        const history: { role: string; content: string }[] = await res.json()
+        if (history.length === 0) return
+
+        const loaded: Message[] = history.map((m) => ({
+          id: uid(),
+          role: m.role === "assistant" ? "ava" : "user",
+          content: m.content,
+          timestamp: "",
+        }))
+        setMessages(loaded)
+      } catch {
+        // silently fail — chat still works without history
+      } finally {
+        setHistoryLoading(false)
+      }
+    }
+    loadHistory()
+  }, [])
+
+  // ── Auto-scroll ───────────────────────────────────────────────
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
 
-  // Auto-resize textarea
+  // ── Auto-resize textarea ──────────────────────────────────────
   useEffect(() => {
     const ta = inputRef.current
     if (!ta) return
@@ -84,6 +95,17 @@ export default function ChatPage() {
     ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`
   }, [input])
 
+  // ── Clear conversation ────────────────────────────────────────
+  const clearConversation = useCallback(async () => {
+    try {
+      await fetch(MEMORY_URL, { method: "DELETE" })
+    } catch {
+      // continue even if backend fails
+    }
+    setMessages([])
+  }, [])
+
+  // ── Send message ──────────────────────────────────────────────
   const sendMessage = useCallback(
     async (text?: string) => {
       const content = (text ?? input).trim()
@@ -110,10 +132,19 @@ export default function ChatPage() {
       setInput("")
       setIsStreaming(true)
 
+      // Persist user message (fire-and-forget)
+      fetch(MEMORY_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: "user", content }),
+      }).catch(() => {})
+
       const history = [...messages, userMsg].map(({ role, content: c }) => ({
         role: role === "ava" ? "assistant" : role,
         content: c,
       }))
+
+      let finalContent = ""
 
       try {
         const res = await fetch(`${API_BASE}/chat/stream`, {
@@ -145,11 +176,11 @@ export default function ChatPage() {
             const type = ev.type as string
 
             if (type === "token") {
+              const token = (ev.content ?? "") as string
+              finalContent += token
               setMessages((p) =>
                 p.map((m) =>
-                  m.id === avaId
-                    ? { ...m, content: m.content + (ev.content ?? "") }
-                    : m,
+                  m.id === avaId ? { ...m, content: m.content + token } : m,
                 ),
               )
             } else if (type === "tool_start") {
@@ -202,7 +233,7 @@ export default function ChatPage() {
             m.id === avaId
               ? {
                   ...m,
-                  content: "Connection error. Retry?",
+                  content: "Connection error. Please retry.",
                   isStreaming: false,
                 }
               : m,
@@ -210,10 +241,23 @@ export default function ChatPage() {
         )
       } finally {
         setMessages((p) =>
-          p.map((m) => (m.id === avaId ? { ...m, isStreaming: false } : m)),
+          p.map((m) =>
+            m.id === avaId
+              ? { ...m, isStreaming: false, thinkingText: undefined }
+              : m,
+          ),
         )
         setIsStreaming(false)
         inputRef.current?.focus()
+
+        // Persist Ava's final response (fire-and-forget)
+        if (finalContent) {
+          fetch(MEMORY_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ role: "assistant", content: finalContent }),
+          }).catch(() => {})
+        }
       }
     },
     [input, isStreaming, messages],
@@ -232,7 +276,6 @@ export default function ChatPage() {
       {/* Page header */}
       <header className="page-header">
         <SidebarTrigger />
-
         <span className="page-header-brand">AVA COMMAND</span>
 
         <div className="header-tabs">
@@ -255,6 +298,13 @@ export default function ChatPage() {
             <SearchIcon />
             <input placeholder="CMD_SEARCH..." />
           </div>
+          <button
+            className="icon-btn"
+            title="Clear conversation"
+            onClick={clearConversation}
+          >
+            <ClearIcon />
+          </button>
           <button className="icon-btn" title="Notifications">
             <BellIcon />
           </button>
@@ -264,9 +314,13 @@ export default function ChatPage() {
         </div>
       </header>
 
-      {/* Chat area — direct flex child of main-content so flex:1 + overflow-y:auto work */}
+      {/* Chat area */}
       <div className="chat-area">
-        {messages.length === 0 && (
+        {historyLoading && (
+          <div className="chat-history-loading">Loading session...</div>
+        )}
+
+        {!historyLoading && messages.length === 0 && (
           <EmptyState
             onSuggest={(s) => sendMessage(s)}
             suggestions={SUGGESTIONS}
@@ -322,7 +376,9 @@ function UserMessage({ message }: { message: Message }) {
   return (
     <div className="fade-up">
       <div className="message-user">{message.content}</div>
-      <div className="message-meta">OPERATOR • {message.timestamp}</div>
+      {message.timestamp && (
+        <div className="message-meta">OPERATOR • {message.timestamp}</div>
+      )}
     </div>
   )
 }
@@ -333,7 +389,7 @@ function AvaMessage({ message }: { message: Message }) {
   return (
     <div className="fade-up">
       <div className="message-ava">
-        {/* Thinking line — shown while tools are running */}
+        {/* Thinking line */}
         {message.isStreaming && message.thinkingText && (
           <div className="message-ava-thinking">{message.thinkingText}</div>
         )}
@@ -344,10 +400,16 @@ function AvaMessage({ message }: { message: Message }) {
             <ToolCallBlock key={i} step={step} />
           ))}
 
-        {/* Final text */}
+        {/* Final text with markdown */}
         {(message.content || message.isStreaming) && (
           <div
-            className={`message-ava-text ${message.isStreaming && !message.content && hasTools ? "" : message.isStreaming ? "streaming-cursor" : ""}`}
+            className={`message-ava-text ${
+              message.isStreaming && !message.content
+                ? ""
+                : message.isStreaming
+                  ? "streaming-cursor"
+                  : ""
+            }`}
           >
             {message.isStreaming && !message.content ? (
               <span className="message-ava-placeholder">
@@ -360,7 +422,9 @@ function AvaMessage({ message }: { message: Message }) {
           </div>
         )}
       </div>
-      <div className="message-meta">AVA SYSTEM • {message.timestamp}</div>
+      {message.timestamp && (
+        <div className="message-meta">AVA SYSTEM • {message.timestamp}</div>
+      )}
     </div>
   )
 }
@@ -368,7 +432,6 @@ function AvaMessage({ message }: { message: Message }) {
 function ToolCallBlock({ step }: { step: ToolStep }) {
   const isDone = step.result !== undefined
 
-  // Pretty-print args as JSON with syntax highlighting
   const formattedArgs = escapeHtml(JSON.stringify(step.args, null, 2))
   const highlighted = formattedArgs
     .replace(/"([^"]+)":/g, '<span class="json-key">"$1"</span>:')
@@ -448,6 +511,20 @@ function SearchIcon() {
         stroke="currentColor"
         strokeWidth="1.2"
         strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
+function ClearIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <path
+        d="M2 3.5h10M5.5 3.5V2.5h3v1M11.5 3.5l-.6 8a1 1 0 01-1 .9H4.1a1 1 0 01-1-.9l-.6-8"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   )
