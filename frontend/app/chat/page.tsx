@@ -1,15 +1,15 @@
 "use client"
 
-import { useState, useRef, useEffect, useCallback, type ReactNode } from "react"
+import { useState, useRef, useEffect, useCallback } from "react"
 import ReactMarkdown from "react-markdown"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { useVoiceInput } from "@/hooks/useVoiceInput"
+import { useContextPanel } from "@/components/ShellProvider"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 const USER_ID = "operator_01"
 const MEMORY_URL = `${API_BASE}/memory/conversation/${USER_ID}`
 
-// ─── Types ───────────────────────────────────────────────────────
 type Role = "user" | "ava"
 
 interface ToolStep {
@@ -26,13 +26,12 @@ interface Message {
   toolSteps?: ToolStep[]
   thinkingText?: string
   timestamp: string
-  imageUrl?: string // base64 data URL for display
+  imageUrl?: string
 }
 
 function uid() {
   return Math.random().toString(36).slice(2, 10)
 }
-
 function now() {
   return new Date().toLocaleTimeString("en-GB", {
     hour: "2-digit",
@@ -48,7 +47,6 @@ const SUGGESTIONS = [
   "Calculate 2 to the power of 32",
 ]
 
-// ─── Main Component ───────────────────────────────────────────────
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState("")
@@ -62,7 +60,8 @@ export default function ChatPage() {
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // ── Voice input ───────────────────────────────────────────────
+  const { contextOpen, setContextOpen } = useContextPanel()
+
   const { voiceState, interimText, toggleListening, isUnsupported } =
     useVoiceInput({
       onTranscript: (text) => {
@@ -71,7 +70,6 @@ export default function ChatPage() {
       },
     })
 
-  // ── Load history on mount ─────────────────────────────────────
   useEffect(() => {
     async function loadHistory() {
       try {
@@ -79,13 +77,14 @@ export default function ChatPage() {
         if (!res.ok) return
         const history: { role: string; content: string }[] = await res.json()
         if (history.length === 0) return
-        const loaded: Message[] = history.map((m) => ({
-          id: uid(),
-          role: m.role === "assistant" ? "ava" : "user",
-          content: m.content,
-          timestamp: "",
-        }))
-        setMessages(loaded)
+        setMessages(
+          history.map((m) => ({
+            id: uid(),
+            role: m.role === "assistant" ? "ava" : "user",
+            content: m.content,
+            timestamp: "",
+          })),
+        )
       } catch {
         // silently fail
       } finally {
@@ -95,12 +94,10 @@ export default function ChatPage() {
     loadHistory()
   }, [])
 
-  // ── Auto-scroll ───────────────────────────────────────────────
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
 
-  // ── Auto-resize textarea ──────────────────────────────────────
   useEffect(() => {
     const ta = inputRef.current
     if (!ta) return
@@ -108,22 +105,17 @@ export default function ChatPage() {
     ta.style.height = `${Math.min(ta.scrollHeight, 120)}px`
   }, [input])
 
-  // ── Clear conversation ────────────────────────────────────────
   const clearConversation = useCallback(async () => {
     try {
       await fetch(MEMORY_URL, { method: "DELETE" })
-    } catch {
-      // continue
-    }
+    } catch {}
     setMessages([])
   }, [])
 
-  // ── Handle image file selection ───────────────────────────────
   const handleFileSelect = useCallback((file: File) => {
     if (!file.type.startsWith("image/")) return
     setPendingImage(file)
-    const url = URL.createObjectURL(file)
-    setPendingImageUrl(url)
+    setPendingImageUrl(URL.createObjectURL(file))
   }, [])
 
   const clearPendingImage = useCallback(() => {
@@ -133,11 +125,9 @@ export default function ChatPage() {
     if (fileInputRef.current) fileInputRef.current.value = ""
   }, [pendingImageUrl])
 
-  // ── Send image to vision endpoint ─────────────────────────────
   const sendImageMessage = useCallback(
     async (file: File, prompt: string) => {
       const previewUrl = URL.createObjectURL(file)
-
       const userMsg: Message = {
         id: uid(),
         role: "user",
@@ -153,35 +143,28 @@ export default function ChatPage() {
         isStreaming: true,
         timestamp: now(),
       }
-
       setMessages((p) => [...p, userMsg, avaMsg])
       setInput("")
       clearPendingImage()
       setIsStreaming(true)
-
       let finalContent = ""
-
       try {
         const formData = new FormData()
         formData.append("file", file)
         formData.append("prompt", prompt || "Describe this image in detail.")
-
         const res = await fetch(`${API_BASE}/vision/analyze`, {
           method: "POST",
           body: formData,
         })
-
         if (!res.ok || !res.body) throw new Error("Vision request failed")
-
         const reader = res.body.getReader()
         const decoder = new TextDecoder()
-
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
-          const lines = decoder.decode(value, { stream: true }).split("\n")
-
-          for (const line of lines) {
+          for (const line of decoder
+            .decode(value, { stream: true })
+            .split("\n")) {
             if (!line.startsWith("data: ")) continue
             const raw = line.slice(6)
             if (raw === "[DONE]") break
@@ -215,7 +198,7 @@ export default function ChatPage() {
             }
           }
         }
-      } catch (err) {
+      } catch {
         setMessages((p) =>
           p.map((m) =>
             m.id === avaId
@@ -233,7 +216,6 @@ export default function ChatPage() {
         )
         setIsStreaming(false)
         inputRef.current?.focus()
-
         if (finalContent) {
           fetch(MEMORY_URL, {
             method: "POST",
@@ -246,17 +228,13 @@ export default function ChatPage() {
     [clearPendingImage],
   )
 
-  // ── Send text message ─────────────────────────────────────────
   const sendMessage = useCallback(
     async (text?: string) => {
       const content = (text ?? input).trim()
-
-      // If image is pending, send to vision endpoint instead
       if (pendingImage) {
         await sendImageMessage(pendingImage, content)
         return
       }
-
       if (!content || isStreaming) return
 
       const userMsg: Message = {
@@ -272,10 +250,8 @@ export default function ChatPage() {
         content: "",
         isStreaming: true,
         toolSteps: [],
-        thinkingText: undefined,
         timestamp: now(),
       }
-
       setMessages((p) => [...p, userMsg, avaMsg])
       setInput("")
       setIsStreaming(true)
@@ -292,7 +268,6 @@ export default function ChatPage() {
       }))
 
       let finalContent = ""
-
       try {
         const res = await fetch(`${API_BASE}/chat/stream`, {
           method: "POST",
@@ -300,16 +275,14 @@ export default function ChatPage() {
           body: JSON.stringify({ messages: history }),
         })
         if (!res.ok || !res.body) throw new Error("Connection failed")
-
         const reader = res.body.getReader()
         const decoder = new TextDecoder()
-
         while (true) {
           const { done, value } = await reader.read()
           if (done) break
-          const lines = decoder.decode(value, { stream: true }).split("\n")
-
-          for (const line of lines) {
+          for (const line of decoder
+            .decode(value, { stream: true })
+            .split("\n")) {
             if (!line.startsWith("data: ")) continue
             const raw = line.slice(6)
             if (raw === "[DONE]") break
@@ -319,9 +292,7 @@ export default function ChatPage() {
             } catch {
               continue
             }
-
             const type = ev.type as string
-
             if (type === "token") {
               const token = (ev.content ?? "") as string
               finalContent += token
@@ -340,7 +311,7 @@ export default function ChatPage() {
                   m.id === avaId
                     ? {
                         ...m,
-                        thinkingText: `Executing ${ev.name as string}...`,
+                        thinkingText: `Executing ${ev.name}...`,
                         toolSteps: [...(m.toolSteps ?? []), step],
                       }
                     : m,
@@ -348,13 +319,13 @@ export default function ChatPage() {
               )
             } else if (type === "tool_result") {
               const name = ev.name as string
-              const result = ev.result as string
               setMessages((p) =>
                 p.map((m) => {
                   if (m.id !== avaId) return m
                   const steps = [...(m.toolSteps ?? [])]
                   const idx = steps.map((s) => s.name).lastIndexOf(name)
-                  if (idx !== -1) steps[idx] = { ...steps[idx], result }
+                  if (idx !== -1)
+                    steps[idx] = { ...steps[idx], result: ev.result as string }
                   return { ...m, toolSteps: steps }
                 }),
               )
@@ -396,7 +367,6 @@ export default function ChatPage() {
         )
         setIsStreaming(false)
         inputRef.current?.focus()
-
         if (finalContent) {
           fetch(MEMORY_URL, {
             method: "POST",
@@ -416,27 +386,11 @@ export default function ChatPage() {
     }
   }
 
-  // ── Drag and drop onto chat area ──────────────────────────────
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault()
-  }
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault()
-    const file = e.dataTransfer.files[0]
-    if (file?.type.startsWith("image/")) {
-      handleFileSelect(file)
-    }
-  }
-
-  // ── Render ────────────────────────────────────────────────────
   return (
     <>
-      {/* Page header */}
       <header className="page-header">
         <SidebarTrigger />
         <span className="page-header-brand">AVA COMMAND</span>
-
         <div className="header-tabs">
           <button
             className={`header-tab ${activeTab === "live" ? "active" : ""}`}
@@ -451,7 +405,6 @@ export default function ChatPage() {
             Archive
           </button>
         </div>
-
         <div className="header-actions">
           <div className="header-search">
             <SearchIcon />
@@ -467,29 +420,39 @@ export default function ChatPage() {
           <button className="icon-btn" title="Notifications">
             <BellIcon />
           </button>
-          <button className="icon-btn" title="Menu">
-            <MenuIcon />
+          <button
+            className="icon-btn"
+            title={contextOpen ? "Close context panel" : "Open context panel"}
+            onClick={() => setContextOpen(!contextOpen)}
+            style={
+              contextOpen
+                ? {
+                    color: "var(--color-teal)",
+                    borderColor: "var(--color-teal-dim)",
+                  }
+                : {}
+            }
+          >
+            <PanelIcon />
           </button>
         </div>
       </header>
 
-      {/* Chat area */}
       <div
         className="chat-area"
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault()
+          const f = e.dataTransfer.files[0]
+          if (f?.type.startsWith("image/")) handleFileSelect(f)
+        }}
       >
         {historyLoading && (
           <div className="chat-history-loading">Loading session...</div>
         )}
-
         {!historyLoading && messages.length === 0 && (
-          <EmptyState
-            onSuggest={(s) => sendMessage(s)}
-            suggestions={SUGGESTIONS}
-          />
+          <EmptyState onSuggest={sendMessage} suggestions={SUGGESTIONS} />
         )}
-
         {messages.map((msg) =>
           msg.role === "user" ? (
             <UserMessage key={msg.id} message={msg} />
@@ -497,8 +460,6 @@ export default function ChatPage() {
             <AvaMessage key={msg.id} message={msg} />
           ),
         )}
-
-        {/* Voice interim */}
         {voiceState === "listening" && (
           <div className="voice-interim">
             <span className="voice-interim-dot" />
@@ -510,17 +471,15 @@ export default function ChatPage() {
             Processing voice input...
           </div>
         )}
-
         <div ref={bottomRef} />
       </div>
 
-      {/* Pending image preview */}
       {pendingImageUrl && (
         <div className="image-preview-bar">
           <div className="image-preview-inner">
             <img
               src={pendingImageUrl}
-              alt="Pending upload"
+              alt="Pending"
               className="image-preview-thumb"
             />
             <div className="image-preview-info">
@@ -535,7 +494,6 @@ export default function ChatPage() {
               className="image-preview-remove"
               onClick={clearPendingImage}
               type="button"
-              title="Remove image"
             >
               ✕
             </button>
@@ -543,19 +501,17 @@ export default function ChatPage() {
         </div>
       )}
 
-      {/* Hidden file input */}
       <input
         ref={fileInputRef}
         type="file"
         accept="image/*"
         style={{ display: "none" }}
         onChange={(e) => {
-          const file = e.target.files?.[0]
-          if (file) handleFileSelect(file)
+          const f = e.target.files?.[0]
+          if (f) handleFileSelect(f)
         }}
       />
 
-      {/* Input area */}
       <div className="chat-input-area">
         <div className={`chat-input-box ${pendingImageUrl ? "has-image" : ""}`}>
           <button
@@ -572,9 +528,7 @@ export default function ChatPage() {
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKey}
             placeholder={
-              pendingImageUrl
-                ? "Ask about this image... (or press Transmit)"
-                : "SEND COMMAND..."
+              pendingImageUrl ? "Ask about this image..." : "SEND COMMAND..."
             }
             disabled={isStreaming}
             rows={1}
@@ -583,7 +537,7 @@ export default function ChatPage() {
             className={`chat-input-icon ${voiceState === "listening" ? "voice-active" : ""}`}
             title={
               isUnsupported
-                ? "Voice not supported in this browser"
+                ? "Voice not supported"
                 : voiceState === "listening"
                   ? "Stop recording"
                   : "Start voice input"
@@ -608,8 +562,6 @@ export default function ChatPage() {
   )
 }
 
-// ─── Sub-components ───────────────────────────────────────────────
-
 function UserMessage({ message }: { message: Message }) {
   return (
     <div className="fade-up">
@@ -632,28 +584,19 @@ function UserMessage({ message }: { message: Message }) {
 
 function AvaMessage({ message }: { message: Message }) {
   const hasTools = (message.toolSteps?.length ?? 0) > 0
-
   return (
     <div className="fade-up">
       <div className="message-ava">
         {message.isStreaming && message.thinkingText && (
           <div className="message-ava-thinking">{message.thinkingText}</div>
         )}
-
         {hasTools &&
           message.toolSteps!.map((step, i) => (
             <ToolCallBlock key={i} step={step} />
           ))}
-
         {(message.content || message.isStreaming) && (
           <div
-            className={`message-ava-text ${
-              message.isStreaming && !message.content
-                ? ""
-                : message.isStreaming
-                  ? "streaming-cursor"
-                  : ""
-            }`}
+            className={`message-ava-text ${message.isStreaming && !message.content ? "" : message.isStreaming ? "streaming-cursor" : ""}`}
           >
             {message.isStreaming && !message.content ? (
               <span className="message-ava-placeholder">
@@ -677,7 +620,6 @@ function ToolCallBlock({ step }: { step: ToolStep }) {
   const isDone = step.result !== undefined
   const isCodeExec = step.name === "execute_code"
   const isFileOp = step.name === "read_file" || step.name === "write_file"
-
   let execResult: {
     stdout?: string
     stderr?: string
@@ -685,29 +627,22 @@ function ToolCallBlock({ step }: { step: ToolStep }) {
     success?: boolean
     error?: string
   } | null = null
-
   if (isCodeExec && step.result) {
     try {
       execResult = JSON.parse(step.result)
-    } catch {
-      execResult = null
-    }
+    } catch {}
   }
-
   const hasFailed = execResult && !execResult.success
-
-  const codeContent: string =
-    typeof step.args.code === "string"
-      ? step.args.code
-      : step.args.code
-        ? String(step.args.code)
-        : ""
-
   const formattedArgs = escapeHtml(JSON.stringify(step.args, null, 2))
   const highlighted = formattedArgs
     .replace(/"([^"]+)":/g, '<span class="json-key">"$1"</span>:')
     .replace(/: "([^"]+)"/g, ': <span class="json-str">"$1"</span>')
     .replace(/: (\d+)/g, ': <span class="json-num">$1</span>')
+  const codeArg = step.args.code
+  const codeText = codeArg == null ? undefined :
+    typeof codeArg === "string"
+      ? codeArg
+      : JSON.stringify(codeArg, null, 2)
 
   return (
     <div className="tool-call-block">
@@ -728,16 +663,18 @@ function ToolCallBlock({ step }: { step: ToolStep }) {
           <span className="badge-pending">Running</span>
         )}
       </div>
-
-      {renderCodeBlock(isCodeExec, step.args.code, codeContent)}
-
+      {isCodeExec && codeText && (
+        <div className="tool-call-code">
+          <div className="tool-call-code-label">Code</div>
+          <pre className="tool-call-code-pre">{codeText}</pre>
+        </div>
+      )}
       {!isCodeExec && (
         <div
           className="tool-call-json"
           dangerouslySetInnerHTML={{ __html: highlighted }}
         />
       )}
-
       {isCodeExec && execResult && (
         <div className="tool-call-exec-result">
           {execResult.stdout && (
@@ -831,25 +768,6 @@ function escapeHtml(value: string) {
     .replaceAll(">", "&gt;")
 }
 
-function CodeBlock({ code }: { code: string }): ReactNode {
-  return (
-    <div className="tool-call-code">
-      <div className="tool-call-code-label">Code</div>
-      <pre className="tool-call-code-pre">{code}</pre>
-    </div>
-  )
-}
-
-function renderCodeBlock(
-  isCodeExec: boolean,
-  code: unknown,
-  codeContent: string,
-): ReactNode {
-  if (!isCodeExec || !code) return null
-  return <CodeBlock code={codeContent} />
-}
-
-// ─── Icons ────────────────────────────────────────────────────────
 function SearchIcon() {
   return (
     <svg
@@ -869,7 +787,6 @@ function SearchIcon() {
     </svg>
   )
 }
-
 function ClearIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -883,7 +800,6 @@ function ClearIcon() {
     </svg>
   )
 }
-
 function BellIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -901,20 +817,6 @@ function BellIcon() {
     </svg>
   )
 }
-
-function MenuIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path
-        d="M2 4h10M2 7h10M2 10h10"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinecap="round"
-      />
-    </svg>
-  )
-}
-
 function AttachIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -927,7 +829,6 @@ function AttachIcon() {
     </svg>
   )
 }
-
 function MicIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -949,7 +850,6 @@ function MicIcon() {
     </svg>
   )
 }
-
 function WaveformIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
@@ -959,6 +859,22 @@ function WaveformIcon() {
         strokeWidth="1.4"
         strokeLinecap="round"
       />
+    </svg>
+  )
+}
+function PanelIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <rect
+        x="1"
+        y="1"
+        width="12"
+        height="12"
+        rx="2"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
+      <path d="M9 1v12" stroke="currentColor" strokeWidth="1.2" />
     </svg>
   )
 }

@@ -1,15 +1,8 @@
 "use client"
 
-/*
-  components/ShellProvider.tsx
-
-  Hosts the app shell using a local shadcn-style sidebar pattern so the same
-  navigation system works across desktop and mobile.
-*/
-
+import { useState } from "react"
 import Sidebar from "@/components/SideBar"
 import ContextPanel from "./ContextPanel"
-import BottomNav from "./BottomNav"
 import {
   SidebarInset,
   SidebarProvider,
@@ -30,19 +23,54 @@ export default function ShellProvider({
   )
 }
 
-function ShellLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
-  const { open } = useSidebar()
+function ShellLayout({ children }: { children: React.ReactNode }) {
+  const { open: sidebarOpen } = useSidebar()
+  const [contextOpen, setContextOpen] = useState(true)
 
   return (
-    <div className={`app-shell ${open ? "sidebar-open" : ""}`}>
+    <div className={`app-shell ${sidebarOpen ? "sidebar-open" : ""}`}>
       <Sidebar />
-      <SidebarInset>{children}</SidebarInset>
-      <ContextPanel />
-      <BottomNav />
+      <SidebarInset>
+        {/* Inject toggle into children via context */}
+        <ContextToggleProvider value={{ contextOpen, setContextOpen }}>
+          {children}
+        </ContextToggleProvider>
+      </SidebarInset>
+      <ContextPanel
+        isOpen={contextOpen}
+        onToggle={() => setContextOpen((v) => !v)}
+      />
     </div>
   )
+}
+
+// ── Simple context for passing toggle to page headers ─────────────
+import { createContext, useContext } from "react"
+
+interface ContextToggleValue {
+  contextOpen: boolean
+  setContextOpen: (v: boolean) => void
+}
+
+const ContextToggleCtx = createContext<ContextToggleValue>({
+  contextOpen: true,
+  setContextOpen: () => {},
+})
+
+export function ContextToggleProvider({
+  children,
+  value,
+}: {
+  children: React.ReactNode
+  value: ContextToggleValue
+}) {
+  return (
+    <ContextToggleCtx.Provider value={value}>
+      {children}
+    </ContextToggleCtx.Provider>
+  )
+}
+
+export function useContextPanel() {
+  return useContext(ContextToggleCtx)
 }

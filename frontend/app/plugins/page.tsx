@@ -2,11 +2,11 @@
 
 import { useState, useEffect } from "react"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import { useContextPanel } from "@/components/ShellProvider"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 const USER_ID = "operator_01"
 
-// ─── Types ───────────────────────────────────────────────────────
 interface Plugin {
   id: string
   tool_name: string
@@ -20,7 +20,6 @@ interface Plugin {
   installed: boolean
 }
 
-// ─── Built-in plugin catalogue ────────────────────────────────────
 const BUILTIN_PLUGINS: Omit<Plugin, "installed">[] = [
   {
     id: "github_repo",
@@ -123,17 +122,14 @@ const BUILTIN_PLUGINS: Omit<Plugin, "installed">[] = [
   },
 ]
 
-// ─── Main Component ───────────────────────────────────────────────
 export default function PluginsPage() {
   const [installedTools, setInstalledTools] = useState<Set<string>>(new Set())
   const [loadingInstall, setLoadingInstall] = useState<string | null>(null)
   const [showSkillModal, setShowModal] = useState(false)
   const [searchQuery, setSearch] = useState("")
   const [dragOver, setDragOver] = useState(false)
+  const { contextOpen, setContextOpen } = useContextPanel()
 
-  const installed = installedTools.size
-
-  // Load installed plugins on mount
   useEffect(() => {
     async function loadInstalled() {
       try {
@@ -141,13 +137,10 @@ export default function PluginsPage() {
         if (!res.ok) return
         const data: { tool_name: string; installed: boolean }[] =
           await res.json()
-        const installedSet = new Set(
-          data.filter((p) => p.installed).map((p) => p.tool_name),
+        setInstalledTools(
+          new Set(data.filter((p) => p.installed).map((p) => p.tool_name)),
         )
-        setInstalledTools(installedSet)
-      } catch {
-        // silently fail — UI still works
-      }
+      } catch {}
     }
     loadInstalled()
   }, [])
@@ -160,11 +153,8 @@ export default function PluginsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tool_name }),
       })
-      if (res.ok) {
-        setInstalledTools((prev) => new Set([...prev, tool_name]))
-      }
+      if (res.ok) setInstalledTools((prev) => new Set([...prev, tool_name]))
     } catch {
-      // silently fail
     } finally {
       setLoadingInstall(null)
     }
@@ -176,15 +166,13 @@ export default function PluginsPage() {
       const res = await fetch(`${API_BASE}/plugins/${USER_ID}/${tool_name}`, {
         method: "DELETE",
       })
-      if (res.ok) {
+      if (res.ok)
         setInstalledTools((prev) => {
-          const next = new Set(prev)
-          next.delete(tool_name)
-          return next
+          const n = new Set(prev)
+          n.delete(tool_name)
+          return n
         })
-      }
     } catch {
-      // silently fail
     } finally {
       setLoadingInstall(null)
     }
@@ -200,7 +188,6 @@ export default function PluginsPage() {
 
   return (
     <>
-      {/* Header */}
       <header className="page-header">
         <SidebarTrigger />
         <div className="page-header-title-group">
@@ -210,9 +197,7 @@ export default function PluginsPage() {
           <span className="header-breadcrumb-separator">—</span>
           <span className="header-breadcrumb">MARKETPLACE / ALL PLUGINS</span>
         </div>
-
         <div className="page-header-spacer" />
-
         <div className="header-actions">
           <div className="header-search">
             <SearchIcon />
@@ -239,12 +224,25 @@ export default function PluginsPage() {
           >
             <PlusIcon />
           </button>
+          <button
+            className="icon-btn"
+            title={contextOpen ? "Close context panel" : "Open context panel"}
+            onClick={() => setContextOpen(!contextOpen)}
+            style={
+              contextOpen
+                ? {
+                    color: "var(--color-teal)",
+                    borderColor: "var(--color-teal-dim)",
+                  }
+                : {}
+            }
+          >
+            <PanelIcon />
+          </button>
         </div>
       </header>
 
-      {/* Page body */}
       <div className="page-body">
-        {/* Hero */}
         <div className="plugins-hero">
           <div className="plugins-hero-title">
             Extend your{" "}
@@ -255,11 +253,9 @@ export default function PluginsPage() {
             </strong>
           </div>
           <p className="plugins-hero-copy">
-            Connect AVA to your entire digital ecosystem. From financial
-            modeling to creative workflows, unlock specialized modules built for
-            high-precision AGI orchestration.
+            Connect AVA to your entire digital ecosystem. Unlock specialized
+            modules built for high-precision AGI orchestration.
           </p>
-
           <div className="plugins-hero-footer">
             <div className="plugins-stats-grid">
               <div className="plugins-stat">
@@ -271,18 +267,16 @@ export default function PluginsPage() {
                   <span className="plugins-stat-unit">MODULES</span>
                 </div>
               </div>
-
               <div className="plugins-stat">
                 <div className="plugins-stat-label">INSTALLED</div>
                 <div className="plugins-stat-value-row">
                   <span className="plugins-stat-value plugins-stat-value-green">
-                    {installed}
+                    {installedTools.size}
                   </span>
                   <span className="plugins-stat-unit">ACTIVE</span>
                 </div>
               </div>
             </div>
-
             <button
               className="plugins-hero-action"
               onClick={() => setShowModal(true)}
@@ -293,7 +287,6 @@ export default function PluginsPage() {
           </div>
         </div>
 
-        {/* Plugin grid */}
         <div className="plugins-grid">
           {filtered.map((plugin, i) => (
             <PluginCard
@@ -308,7 +301,6 @@ export default function PluginsPage() {
               loading={loadingInstall === plugin.tool_name}
             />
           ))}
-
           {filtered.length === 0 && (
             <div className="page-empty-state page-empty-state-full">
               No plugins match &quot;{searchQuery}&quot;
@@ -317,7 +309,6 @@ export default function PluginsPage() {
         </div>
       </div>
 
-      {/* Skills Studio modal */}
       {showSkillModal && (
         <SkillsStudioModal
           onClose={() => setShowModal(false)}
@@ -329,7 +320,6 @@ export default function PluginsPage() {
   )
 }
 
-// ─── Plugin Card ──────────────────────────────────────────────────
 function PluginCard({
   plugin,
   delay,
@@ -349,16 +339,12 @@ function PluginCard({
       style={{ animationDelay: `${delay}ms`, animationFillMode: "both" }}
     >
       {plugin.installed && <div className="plugin-active-badge">● ACTIVE</div>}
-
-      {/* Icon */}
       <div
         className="plugin-icon"
         style={{ background: plugin.iconBg, color: "var(--color-teal)" }}
       >
         {plugin.icon}
       </div>
-
-      {/* Stars */}
       <div className="plugin-stars">
         {Array.from({ length: 5 }).map((_, i) => (
           <span key={i} className={i < plugin.stars ? "star" : "star-empty"}>
@@ -366,12 +352,8 @@ function PluginCard({
           </span>
         ))}
       </div>
-
-      {/* Name + by */}
       <div className="plugin-name">{plugin.name}</div>
       <div className="plugin-by">by {plugin.by}</div>
-
-      {/* Tags */}
       <div className="plugin-tags">
         {plugin.tags.map((tag) => (
           <span key={tag} className="plugin-tag">
@@ -379,8 +361,6 @@ function PluginCard({
           </span>
         ))}
       </div>
-
-      {/* Install / Uninstall button */}
       <button
         className={`install-btn ${plugin.installed ? "installed" : ""}`}
         onClick={plugin.installed ? onUninstall : onInstall}
@@ -393,7 +373,6 @@ function PluginCard({
   )
 }
 
-// ─── Skills Studio Modal ──────────────────────────────────────────
 function SkillsStudioModal({
   onClose,
   dragOver,
@@ -404,30 +383,17 @@ function SkillsStudioModal({
   setDragOver: (v: boolean) => void
 }) {
   const [terminalCmd, setTerminalCmd] = useState("")
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault()
-    setDragOver(false)
-    const file = e.dataTransfer.files[0]
-    if (file && file.name.endsWith(".md")) {
-      alert(`Skill file "${file.name}" received. Integration pending.`)
-    }
-  }
-
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal-box" onClick={(e) => e.stopPropagation()}>
         <button className="modal-close-btn" onClick={onClose} type="button">
           X
         </button>
-
         <div className="modal-title">Initialize New Skill</div>
         <div className="modal-sub">
           Select ingestion method for neural integration.
         </div>
-
         <div className="modal-options">
-          {/* Option 1: Upload SKILL.MD */}
           <div
             className="modal-option"
             onDragOver={(e) => {
@@ -435,7 +401,10 @@ function SkillsStudioModal({
               setDragOver(true)
             }}
             onDragLeave={() => setDragOver(false)}
-            onDrop={handleDrop}
+            onDrop={(e) => {
+              e.preventDefault()
+              setDragOver(false)
+            }}
             style={{
               borderColor: dragOver ? "var(--color-teal-dim)" : undefined,
             }}
@@ -451,21 +420,17 @@ function SkillsStudioModal({
             </div>
             <div className="modal-option-title">Upload Skill.md</div>
             <div className="modal-option-desc">
-              Directly inject markdown definitions and logical parameters into
-              the core library.
+              Inject markdown definitions into the core library.
             </div>
             <div
               className="dropzone"
               style={{
                 borderColor: dragOver ? "var(--color-teal)" : undefined,
-                color: dragOver ? "var(--color-teal)" : undefined,
               }}
             >
               Drag & Drop File Here
             </div>
           </div>
-
-          {/* Option 2: Skills.sh terminal */}
           <div className="modal-option">
             <div
               className="modal-option-icon"
@@ -478,8 +443,7 @@ function SkillsStudioModal({
             </div>
             <div className="modal-option-title">Load via Skills.sh</div>
             <div className="modal-option-desc">
-              Initialize automated routines and system-level scripts via shell
-              interface.
+              Initialize automated routines via shell interface.
             </div>
             <div className="terminal-input">
               <div className="terminal-dots">
@@ -496,7 +460,6 @@ function SkillsStudioModal({
             </div>
           </div>
         </div>
-
         <div className="modal-footer">
           <button className="abort-btn" onClick={onClose}>
             Abort Initialization
@@ -507,7 +470,6 @@ function SkillsStudioModal({
   )
 }
 
-// ─── Icons ────────────────────────────────────────────────────────
 function SearchIcon() {
   return (
     <svg
@@ -527,7 +489,6 @@ function SearchIcon() {
     </svg>
   )
 }
-
 function BellIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -545,7 +506,6 @@ function BellIcon() {
     </svg>
   )
 }
-
 function GridIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -588,7 +548,6 @@ function GridIcon() {
     </svg>
   )
 }
-
 function PlusIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
@@ -601,7 +560,22 @@ function PlusIcon() {
     </svg>
   )
 }
-
+function PanelIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <rect
+        x="1"
+        y="1"
+        width="12"
+        height="12"
+        rx="2"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
+      <path d="M9 1v12" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  )
+}
 function UploadIcon() {
   return (
     <svg
@@ -636,7 +610,6 @@ function UploadIcon() {
     </svg>
   )
 }
-
 function TerminalIcon() {
   return (
     <svg

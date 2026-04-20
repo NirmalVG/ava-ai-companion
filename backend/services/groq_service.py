@@ -1,33 +1,44 @@
 """
 services/groq_service.py
 
-The core orchestration loop. Handles the full agentic cycle:
+The core orchestration loop with multi-model fallback cascade.
 
-  LOOP:
-    1. Send messages + tool schemas to LLM
-    2. LLM responds with EITHER:
-       a) A text response  →  stream tokens, we're done
-       b) A tool_call      →  execute the tool, append result, go back to step 1
+Model priority:
+  1. qwen/qwen3-32b        — best quality, tool calling
+  2. llama-3.3-70b-versatile — strong fallback, high TPM
+  3. llama3-70b-8192        — reliable fallback
+  4. llama-3.1-8b-instant   — fast, high TPM, last resort
 
-  Yielded event types:
-    {"type": "token",       "content": "The weather in..."}
-    {"type": "tool_start",  "name": "get_weather", "args": {"city": "Thrissur"}}
-    {"type": "tool_result", "name": "get_weather", "result": "{...}"}
-    {"type": "error",       "content": "Something went wrong"}
+If a model hits rate limits (429) or token limits (413),
+the next model in the cascade is tried automatically.
 """
 
 import os
 import json
+import asyncio
 from groq import AsyncGroq
+from groq import RateLimitError, BadRequestError
 from typing import AsyncGenerator
 from services.tool_registry import TOOL_SCHEMAS, TOOL_HANDLERS
 from services.plugin_registry import PLUGIN_TOOL_SCHEMAS, PLUGIN_HANDLERS
 
 client: AsyncGroq | None = None
 
-MAX_HISTORY_MESSAGES = 10
-MAX_TOKENS_TOOLS = 4096     # tool calls need room for code generation
-MAX_TOKENS_STREAM = 2048    # final streamed response stays within TPM
+# ── Model cascade ─────────────────────────────────────────────────
+# Each entry: (model_id, max_tokens_tools, max_tokens_stream)
+# Ordered from best quality to fastest/highest-limit fallback
+MODEL_CASCADE = [
+    ("qwen/qwen3-32b",           3000, 1500),
+    ("llama-3.3-70b-versatile",  3000, 1500),
+    ("llama3-70b-8192",          2048, 1024),
+    ("llama-3.1-8b-instant",     2048, 1024),
+]
+
+# Errors that should trigger a fallback to the next model
+FALLBACK_ERRORS = (RateLimitError, BadRequestError)
+
+MAX_MSGS_WITH_TOOLS = 4
+MAX_MSGS_NO_TOOLS = 8
 
 
 def get_groq_client() -> AsyncGroq:
@@ -37,88 +48,95 @@ def get_groq_client() -> AsyncGroq:
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
         raise RuntimeError(
-            "Missing GROQ_API_KEY. Add it to backend/.env.local or backend/.env "
-            "before using /chat/stream."
+            "Missing GROQ_API_KEY. Add it to backend/.env.local or backend/.env."
         )
     client = AsyncGroq(api_key=api_key)
     return client
 
 
-AVA_SYSTEM_PROMPT = """You are Ava, an AGI-level personal assistant created by Nirmal.
+AVA_SYSTEM_PROMPT = """You are Ava, an AGI-level assistant by Nirmal.
+You are a world-class expert across all domains. Give detailed, well-researched,
+structured answers with examples, analogies, and depth. Never be shallow.
+Anticipate follow-up questions and address them proactively.
 
-You are a world-class expert across all domains — science, engineering, philosophy,
-medicine, law, finance, history, mathematics, and creative arts. You think deeply
-before responding, consider multiple angles, and deliver responses that are genuinely
-useful, accurate, and insightful.
+TOOL RULES:
+- Never use emoji. Never use XML function tags.
+- Only call tools when explicitly needed.
+- get_current_time: only if user asks time/date.
+- get_weather: only if user asks weather.
+- calculate: only if user asks for calculation.
+- web_search: only for current/unknown info.
+- execute_code: run code to verify fixes work.
+- read_file/write_file: for file operations.
+- Acknowledge personal info without calling tools.
 
-RESPONSE QUALITY STANDARDS:
-- Give detailed, well-researched answers that demonstrate deep domain knowledge.
-- Structure complex answers with clear sections, examples, and analogies.
-- When explaining technical concepts, go beyond surface level — include the why,
-  not just the what.
-- Cite relevant principles, frameworks, or real-world context where applicable.
-- If a question has nuance or competing perspectives, acknowledge and explore them.
-- Never give a lazy one-liner when the question deserves depth.
-- Proactively include information the user would want to know even if they did not
-  explicitly ask — anticipate follow-up questions and address them.
-- Use code examples, comparisons, and structured breakdowns when they aid clarity.
-- If you are uncertain about something, say so clearly rather than guessing.
-
-CRITICAL TOOL RULES:
-- Never use emoji in responses.
-- NEVER use XML-style function tags like <function=name {...}>. Strictly forbidden.
-- Tools are called via the structured tool_calls API only — never inline in text.
-- ONLY call a tool when the user is EXPLICITLY asking for that specific information.
-- NEVER call get_current_time unless the user directly asks for the time or date.
-- NEVER call get_weather unless the user directly asks for weather.
-- NEVER call calculate unless the user asks you to compute something.
-- NEVER call web_search unless the user needs current information you do not have.
-- If the user shares personal info (location, preferences), just acknowledge — no tools.
-
-CODE FIXING WORKFLOW — follow this exactly when asked to fix code:
-  1. If the user provides a file path, use read_file to read the actual file.
-  2. Analyze the code carefully — identify the root cause, not just the symptom.
-  3. Write the complete fixed code.
-  4. Use execute_code to RUN the fix and verify it works before presenting it.
-  5. If execution fails, iterate — fix the error and run again (up to 3 times).
-  6. Once verified working, present the fix with a clear explanation of:
-     - What was wrong and why
-     - What you changed and why
-     - How you confirmed it works (show the execution output)
-  7. If the user wants the fix saved, use write_file to write it to disk.
-
-After using a tool, synthesize the result into a thorough, insightful response.
-Never just repeat raw tool output — interpret, contextualize, and expand on it."""
+CODE FIXING: read file → analyze → fix → execute_code to verify → explain what changed."""
 
 
 TONE_INSTRUCTIONS = {
-    "casual": (
-        "Speak in a friendly, conversational tone like a brilliant friend who happens "
-        "to be an expert. Use plain language but do not sacrifice depth or accuracy. "
-        "Feel free to use contractions and be direct."
-    ),
-    "balanced": (
-        "Speak naturally — warm, clear, and professional. Provide thorough explanations "
-        "with good structure. Use headers and bullet points for complex topics. "
-        "Be comprehensive but not padded."
-    ),
-    "professional": (
-        "Speak formally and with precision. Structure responses with clear sections. "
-        "Use domain-appropriate terminology. Be exhaustive — cover edge cases, "
-        "trade-offs, and nuances. Suitable for professional or academic contexts."
-    ),
-    "concise": (
-        "Be direct and efficient. Lead with the answer, then provide essential context. "
-        "Skip preamble and filler. Still include critical details — brevity means "
-        "no padding, not shallowness."
-    ),
-    "research": (
-        "Respond like a senior researcher writing a detailed technical brief. "
-        "Provide exhaustive coverage — background, current state, key concepts, "
-        "trade-offs, open questions, and practical implications. Use structured "
-        "headers, numbered points, and examples. Leave no important angle unexplored."
-    ),
+    "casual":       "Friendly expert tone. Plain language, full depth.",
+    "balanced":     "Warm and professional. Structured, thorough.",
+    "professional": "Formal, precise, exhaustive. Cover edge cases.",
+    "concise":      "Direct. Lead with answer. No filler, full detail.",
+    "research":     "Senior researcher style. Full coverage, headers, examples.",
 }
+
+
+# ── Model selector helper ─────────────────────────────────────────
+def supports_reasoning_format(model: str) -> bool:
+    """Only qwen3 models support reasoning_format=hidden."""
+    return "qwen3" in model or "qwen/qwen3" in model
+
+
+def build_extra_body(model: str) -> dict:
+    if supports_reasoning_format(model):
+        return {"reasoning_format": "hidden"}
+    return {}
+
+
+async def try_tool_call(
+    groq_client: AsyncGroq,
+    model: str,
+    max_tokens: int,
+    working_messages: list,
+    all_tool_schemas: list,
+) -> tuple:
+    """
+    Attempt a non-streaming tool detection call.
+    Returns (message, finish_reason) or raises on failure.
+    """
+    response = await groq_client.chat.completions.create(
+        model=model,
+        messages=working_messages,
+        tools=all_tool_schemas,
+        tool_choice="auto",
+        parallel_tool_calls=False,
+        max_tokens=max_tokens,
+        temperature=0.2,
+        stream=False,
+        extra_body=build_extra_body(model),
+    )
+    return response.choices[0].message, response.choices[0].finish_reason
+
+
+async def try_stream(
+    groq_client: AsyncGroq,
+    model: str,
+    max_tokens: int,
+    working_messages: list,
+):
+    """
+    Attempt a streaming call.
+    Returns the stream object or raises on failure.
+    """
+    return await groq_client.chat.completions.create(
+        model=model,
+        messages=working_messages,
+        max_tokens=max_tokens,
+        temperature=0.7,
+        stream=True,
+        extra_body=build_extra_body(model),
+    )
 
 
 async def stream_chat(
@@ -128,16 +146,10 @@ async def stream_chat(
     tone: str = "balanced",
 ) -> AsyncGenerator[dict, None]:
     """
-    The main agentic loop. Yields event dicts that the router serializes to SSE.
-
-    Parameters:
-      messages:           conversation history
-      user_id:            current user
-      installed_plugins:  list of tool_names the user has installed
-      tone:               response tone preference
+    The main agentic loop with multi-model fallback cascade.
     """
 
-    # ── Build tool list: core tools + installed plugins ───────────
+    # ── Build tool list ───────────────────────────────────────────
     active_plugin_schemas = [
         PLUGIN_TOOL_SCHEMAS[name]
         for name in (installed_plugins or [])
@@ -155,13 +167,11 @@ async def stream_chat(
     }
 
     # ── Trim history ──────────────────────────────────────────────
-    # Be aggressive when tools are active — tool call JSON is expensive
-    # on the free tier TPM limit
-    max_msgs = 6 if all_tool_schemas else MAX_HISTORY_MESSAGES
+    max_msgs = MAX_MSGS_WITH_TOOLS if all_tool_schemas else MAX_MSGS_NO_TOOLS
     if len(messages) > max_msgs:
         messages = messages[-max_msgs:]
 
-    # ── Build system prompt with tone ─────────────────────────────
+    # ── Build system prompt ───────────────────────────────────────
     tone_note = TONE_INSTRUCTIONS.get(tone, TONE_INSTRUCTIONS["balanced"])
     system_prompt = f"{AVA_SYSTEM_PROMPT}\n\nTONE: {tone_note}"
 
@@ -173,25 +183,69 @@ async def stream_chat(
     groq_client = get_groq_client()
     max_iterations = 5
 
+    # Track which model we're currently using across iterations
+    # so fallback persists for the whole conversation turn
+    current_model_idx = 0
+
     for iteration in range(max_iterations):
 
-        # ── Tool detection call (non-streaming) ───────────────────
-        # Lower temperature for reliable structured JSON output.
-        # Higher max_tokens so code generation doesn't truncate mid-JSON.
-        response = await groq_client.chat.completions.create(
-            model="qwen/qwen3-32b",
-            messages=working_messages,
-            tools=all_tool_schemas,
-            tool_choice="auto",
-            parallel_tool_calls=False,
-            max_tokens=MAX_TOKENS_TOOLS,
-            temperature=0.2,
-            stream=False,
-            extra_body={"reasoning_format": "hidden"},
-        )
+        # ── Tool detection call with cascade ──────────────────────
+        message = None
+        finish_reason = None
 
-        message = response.choices[0].message
-        finish_reason = response.choices[0].finish_reason
+        for model_idx in range(current_model_idx, len(MODEL_CASCADE)):
+            model, max_tokens_tools, max_tokens_stream = MODEL_CASCADE[model_idx]
+            try:
+                message, finish_reason = await try_tool_call(
+                    groq_client, model, max_tokens_tools,
+                    working_messages, all_tool_schemas,
+                )
+                # Success — lock to this model for the rest of this turn
+                current_model_idx = model_idx
+                if model_idx > 0:
+                    # Let the frontend know we fell back
+                    yield {
+                        "type": "token",
+                        "content": f"_[Using fallback model: {model}]_\n\n",
+                    }
+                break
+            except FALLBACK_ERRORS as e:
+                error_str = str(e)
+                is_rate_limit = "429" in error_str or "rate_limit" in error_str
+                is_too_large = "413" in error_str or "too large" in error_str.lower()
+
+                if is_rate_limit or is_too_large:
+                    if model_idx < len(MODEL_CASCADE) - 1:
+                        next_model = MODEL_CASCADE[model_idx + 1][0]
+                        print(
+                            f"[Cascade] {model} failed "
+                            f"({'rate limit' if is_rate_limit else 'too large'}), "
+                            f"trying {next_model}"
+                        )
+                        continue
+                    else:
+                        yield {
+                            "type": "error",
+                            "content": "All models are currently rate limited. Please try again in a moment.",
+                        }
+                        return
+                else:
+                    # Non-rate-limit error — surface it directly
+                    yield {"type": "error", "content": error_str}
+                    return
+            except Exception as e:
+                yield {"type": "error", "content": str(e)}
+                return
+
+        if message is None:
+            yield {
+                "type": "error",
+                "content": "Could not get a response from any model.",
+            }
+            return
+
+        _, max_tokens_tools, max_tokens_stream = MODEL_CASCADE[current_model_idx]
+        current_model = MODEL_CASCADE[current_model_idx][0]
 
         # ── Case 1: Tool Call ─────────────────────────────────────
         if finish_reason == "tool_calls" and message.tool_calls:
@@ -234,28 +288,48 @@ async def stream_chat(
                     "content": result,
                 })
 
-            continue  # loop — LLM reads tool results and responds
+            continue
 
-        # ── Case 2: Malformed XML function tag ────────────────────
+        # ── Case 2: Malformed XML tag ─────────────────────────────
         elif message.content and "<function=" in message.content:
             yield {
                 "type": "error",
-                "content": "I encountered a formatting issue. Please try rephrasing.",
+                "content": "Formatting issue encountered. Please try rephrasing.",
             }
             return
 
-        # ── Case 3: Final text response — stream token by token ───
-        # Higher temperature for natural language. Lower max_tokens
-        # to stay within free tier TPM on the streaming call.
+        # ── Case 3: Final streamed response with cascade ──────────
         else:
-            stream = await groq_client.chat.completions.create(
-                model="qwen/qwen3-32b",
-                messages=working_messages,
-                max_tokens=MAX_TOKENS_STREAM,
-                temperature=0.7,
-                stream=True,
-                extra_body={"reasoning_format": "hidden"},
-            )
+            stream = None
+            for model_idx in range(current_model_idx, len(MODEL_CASCADE)):
+                model, _, max_tokens_stream = MODEL_CASCADE[model_idx]
+                try:
+                    stream = await try_stream(
+                        groq_client, model,
+                        max_tokens_stream, working_messages,
+                    )
+                    break
+                except FALLBACK_ERRORS as e:
+                    error_str = str(e)
+                    is_rate_limit = "429" in error_str or "rate_limit" in error_str
+                    is_too_large = "413" in error_str or "too large" in error_str.lower()
+
+                    if (is_rate_limit or is_too_large) and model_idx < len(MODEL_CASCADE) - 1:
+                        print(f"[Cascade] Stream fallback: {model} → {MODEL_CASCADE[model_idx+1][0]}")
+                        continue
+                    else:
+                        yield {"type": "error", "content": str(e)}
+                        return
+                except Exception as e:
+                    yield {"type": "error", "content": str(e)}
+                    return
+
+            if stream is None:
+                yield {
+                    "type": "error",
+                    "content": "All models are currently unavailable. Please try again shortly.",
+                }
+                return
 
             buffer = ""
             in_think = False
@@ -267,9 +341,6 @@ async def stream_chat(
 
                 buffer += token
 
-                # Strip <think>...</think> blocks from reasoning models.
-                # reasoning_format=hidden should prevent these but we
-                # keep the fallback stripper for safety.
                 while True:
                     if in_think:
                         end = buffer.find("</think>")
@@ -287,14 +358,11 @@ async def stream_chat(
                             buffer = buffer[start + 7:]
                             in_think = True
                         else:
-                            # Hold back 7 chars in case <think> is split
-                            # across chunk boundaries
                             if len(buffer) > 7:
                                 yield {"type": "token", "content": buffer[:-7]}
                                 buffer = buffer[-7:]
                             break
 
-            # Flush remaining buffer after stream ends
             if buffer and not in_think:
                 yield {"type": "token", "content": buffer}
 

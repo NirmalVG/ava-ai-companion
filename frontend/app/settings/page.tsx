@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import { useContextPanel } from "@/components/ShellProvider"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 const USER_ID = "operator_01"
@@ -56,6 +57,7 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deletingData, setDeletingData] = useState(false)
+  const { contextOpen, setContextOpen } = useContextPanel()
 
   useEffect(() => {
     async function load() {
@@ -63,7 +65,6 @@ export default function SettingsPage() {
         const res = await fetch(SETTINGS_URL)
         if (res.ok) setSettings(await res.json())
       } catch {
-        // use defaults
       } finally {
         setLoading(false)
       }
@@ -83,7 +84,6 @@ export default function SettingsPage() {
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch {
-      // silently fail
     } finally {
       setSaving(false)
     }
@@ -95,8 +95,6 @@ export default function SettingsPage() {
     saveSettings(updated)
   }
 
-  const handleExport = () => window.open(`${SETTINGS_URL}/export`, "_blank")
-
   const handleDeleteAll = async () => {
     setDeletingData(true)
     try {
@@ -104,19 +102,17 @@ export default function SettingsPage() {
       setShowDeleteConfirm(false)
       window.location.href = "/chat"
     } catch {
-      // silently fail
     } finally {
       setDeletingData(false)
     }
   }
 
-  // ── Shared style tokens ───────────────────────────────────────
   const S = {
     section: {
       padding: "24px 0",
       borderBottom: "1px solid #151f35",
     } as React.CSSProperties,
-    sectionTitle: {
+    title: {
       fontFamily: "var(--font-display)",
       fontSize: 14,
       fontWeight: 700,
@@ -125,7 +121,7 @@ export default function SettingsPage() {
       color: "#c8d6f0",
       marginBottom: 6,
     } as React.CSSProperties,
-    sectionDesc: {
+    desc: {
       fontSize: 11,
       color: "#4a6080",
       lineHeight: 1.6,
@@ -134,7 +130,7 @@ export default function SettingsPage() {
     } as React.CSSProperties,
   }
 
-  if (loading) {
+  if (loading)
     return (
       <>
         <header className="page-header">
@@ -146,11 +142,9 @@ export default function SettingsPage() {
         </div>
       </>
     )
-  }
 
   return (
     <>
-      {/* Header */}
       <header className="page-header">
         <SidebarTrigger />
         <span className="page-header-brand">AVA COMMAND</span>
@@ -179,11 +173,25 @@ export default function SettingsPage() {
               Saving...
             </span>
           )}
+          <button
+            className="icon-btn"
+            title={contextOpen ? "Close context panel" : "Open context panel"}
+            onClick={() => setContextOpen(!contextOpen)}
+            style={
+              contextOpen
+                ? {
+                    color: "var(--color-teal)",
+                    borderColor: "var(--color-teal-dim)",
+                  }
+                : {}
+            }
+          >
+            <PanelIcon />
+          </button>
         </div>
       </header>
 
       <div className="page-body">
-        {/* Hero */}
         <div className="page-hero">
           <div className="page-hero-title">Settings</div>
           <div className="page-hero-sub">
@@ -192,10 +200,10 @@ export default function SettingsPage() {
         </div>
 
         <div style={{ padding: "0 28px", maxWidth: 720 }}>
-          {/* ── Response Tone ─────────────────────────────── */}
+          {/* Tone */}
           <div style={S.section}>
-            <div style={S.sectionTitle}>Response Tone</div>
-            <div style={S.sectionDesc}>
+            <div style={S.title}>Response Tone</div>
+            <div style={S.desc}>
               Controls how Ava communicates. Takes effect on the next message.
             </div>
             <div
@@ -219,7 +227,6 @@ export default function SettingsPage() {
                       padding: "12px 14px",
                       textAlign: "left",
                       cursor: "pointer",
-                      transition: "all 0.15s",
                       fontFamily: "var(--font-mono)",
                     }}
                   >
@@ -249,12 +256,12 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* ── Memory Extraction ─────────────────────────── */}
+          {/* Memory */}
           <div style={S.section}>
-            <div style={S.sectionTitle}>Memory Extraction</div>
-            <div style={S.sectionDesc}>
+            <div style={S.title}>Memory Extraction</div>
+            <div style={S.desc}>
               When enabled, Ava automatically extracts facts and preferences
-              from your conversations and stores them in the Memory Vault.
+              from your conversations.
             </div>
             <div
               style={{
@@ -263,18 +270,11 @@ export default function SettingsPage() {
                 justifyContent: "space-between",
               }}
             >
-              <span
-                style={{
-                  fontSize: 12,
-                  color: "#4a6080",
-                  letterSpacing: "0.03em",
-                }}
-              >
+              <span style={{ fontSize: 12, color: "#4a6080" }}>
                 {settings.memory_enabled === "true"
                   ? "Memory extraction is ON"
                   : "Memory extraction is OFF"}
               </span>
-              {/* Toggle */}
               <button
                 type="button"
                 onClick={() =>
@@ -306,19 +306,18 @@ export default function SettingsPage() {
                     borderRadius: "50%",
                     background:
                       settings.memory_enabled === "true" ? "white" : "#4a6080",
-                    transition: "left 0.2s, background 0.2s",
+                    transition: "left 0.2s",
                   }}
                 />
               </button>
             </div>
           </div>
 
-          {/* ── Conversation Retention ────────────────────── */}
+          {/* Retention */}
           <div style={S.section}>
-            <div style={S.sectionTitle}>Conversation Retention</div>
-            <div style={S.sectionDesc}>
-              How many days of conversation history to keep. Older messages are
-              automatically pruned.
+            <div style={S.title}>Conversation Retention</div>
+            <div style={S.desc}>
+              How many days of conversation history to keep.
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               {RETENTION_OPTIONS.map((days) => {
@@ -340,7 +339,6 @@ export default function SettingsPage() {
                       color: isActive ? "#00c8ff" : "#4a6080",
                       cursor: "pointer",
                       fontFamily: "var(--font-mono)",
-                      transition: "all 0.15s",
                     }}
                   >
                     {days}d
@@ -350,17 +348,17 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* ── Data & Privacy ────────────────────────────── */}
+          {/* Data */}
           <div style={S.section}>
-            <div style={S.sectionTitle}>Data & Privacy</div>
-            <div style={S.sectionDesc}>
+            <div style={S.title}>Data & Privacy</div>
+            <div style={S.desc}>
               Export or permanently delete all data associated with your
               account.
             </div>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <button
                 type="button"
-                onClick={handleExport}
+                onClick={() => window.open(`${SETTINGS_URL}/export`, "_blank")}
                 style={{
                   display: "inline-flex",
                   alignItems: "center",
@@ -375,12 +373,10 @@ export default function SettingsPage() {
                   background: "transparent",
                   color: "#4a6080",
                   cursor: "pointer",
-                  transition: "all 0.15s",
                 }}
               >
                 <ExportIcon /> Export Conversation
               </button>
-
               <button
                 type="button"
                 onClick={() => setShowDeleteConfirm(true)}
@@ -398,7 +394,6 @@ export default function SettingsPage() {
                   background: "transparent",
                   color: "#ff4444",
                   cursor: "pointer",
-                  transition: "all 0.15s",
                 }}
               >
                 <DeleteIcon /> Delete All Data
@@ -406,9 +401,9 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {/* ── Account ───────────────────────────────────── */}
+          {/* Account */}
           <div style={{ ...S.section, borderBottom: "none" }}>
-            <div style={S.sectionTitle}>Account</div>
+            <div style={S.title}>Account</div>
             <div
               style={{
                 display: "flex",
@@ -421,7 +416,6 @@ export default function SettingsPage() {
                 flexWrap: "wrap",
               }}
             >
-              {/* Avatar */}
               <div
                 style={{
                   width: 40,
@@ -460,7 +454,6 @@ export default function SettingsPage() {
                   ● SYSTEM LINKED
                 </div>
               </div>
-              {/* Meta */}
               <div
                 style={{
                   marginLeft: "auto",
@@ -504,7 +497,6 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* Delete confirmation modal */}
       {showDeleteConfirm && (
         <div
           className="modal-backdrop"
@@ -573,7 +565,6 @@ function ExportIcon() {
     </svg>
   )
 }
-
 function DeleteIcon() {
   return (
     <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
@@ -584,6 +575,22 @@ function DeleteIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  )
+}
+function PanelIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <rect
+        x="1"
+        y="1"
+        width="12"
+        height="12"
+        rx="2"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
+      <path d="M9 1v12" stroke="currentColor" strokeWidth="1.2" />
     </svg>
   )
 }

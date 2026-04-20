@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import { useContextPanel } from "@/components/ShellProvider"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 const USER_ID = "operator_01"
@@ -54,6 +55,7 @@ export default function MemoryVaultPage() {
   const [loading, setLoading] = useState(true)
   const [activeFilter, setActiveFilter] = useState<FilterTab>("all")
   const [search, setSearch] = useState("")
+  const { contextOpen, setContextOpen } = useContextPanel()
 
   const fetchMemories = useCallback(async (filter: FilterTab) => {
     setLoading(true)
@@ -66,13 +68,11 @@ export default function MemoryVaultPage() {
             : filter === "preferences"
               ? "preference"
               : "all"
-
       const res = await fetch(
         `${API_BASE}/memory/vault/${USER_ID}?type_filter=${typeParam}`,
       )
       if (!res.ok) return
-      const data: MemoryEntry[] = await res.json()
-      setEntries(data)
+      setEntries(await res.json())
     } catch {
       // silently fail
     } finally {
@@ -90,9 +90,7 @@ export default function MemoryVaultPage() {
         method: "DELETE",
       })
       setEntries((prev) => prev.filter((e) => e.id !== id))
-    } catch {
-      // silently fail
-    }
+    } catch {}
   }
 
   const filtered = entries.filter(
@@ -131,11 +129,25 @@ export default function MemoryVaultPage() {
           >
             <RefreshIcon />
           </button>
+          <button
+            className="icon-btn"
+            title={contextOpen ? "Close context panel" : "Open context panel"}
+            onClick={() => setContextOpen(!contextOpen)}
+            style={
+              contextOpen
+                ? {
+                    color: "var(--color-teal)",
+                    borderColor: "var(--color-teal-dim)",
+                  }
+                : {}
+            }
+          >
+            <PanelIcon />
+          </button>
         </div>
       </header>
 
       <div className="page-body">
-        {/* Hero */}
         <div className="page-hero">
           <div className="page-hero-title">Memory Vault</div>
           <div className="page-hero-sub">
@@ -149,7 +161,6 @@ export default function MemoryVaultPage() {
           </div>
         </div>
 
-        {/* Filter tabs */}
         <div className="filter-tabs">
           {FILTERS.map((f) => (
             <button
@@ -162,12 +173,10 @@ export default function MemoryVaultPage() {
           ))}
         </div>
 
-        {/* Content */}
         <div className="memory-list">
           {loading && (
             <div className="page-empty-state">Scanning memory banks...</div>
           )}
-
           {!loading && filtered.length === 0 && (
             <div className="page-empty-state">
               {entries.length === 0
@@ -175,7 +184,6 @@ export default function MemoryVaultPage() {
                 : "No entries match this filter."}
             </div>
           )}
-
           {!loading &&
             filtered.map((entry, i) => (
               <MemoryCard
@@ -185,7 +193,6 @@ export default function MemoryVaultPage() {
                 onDelete={() => handleDelete(entry.id)}
               />
             ))}
-
           {!loading && filtered.length > 0 && activeFilter === "all" && (
             <div className="memory-status-row">
               <div className="memory-status-badge">
@@ -211,7 +218,6 @@ function MemoryCard({
 }) {
   const colors = TYPE_COLORS[entry.type] ?? TYPE_COLORS.fact
   const icon = TYPE_ICONS[entry.type] ?? "◎"
-
   return (
     <div
       className="memory-card fade-up"
@@ -221,7 +227,6 @@ function MemoryCard({
         className="memory-card-indicator"
         style={{ background: colors.indicator }}
       />
-
       <div className="memory-card-body">
         <div className="memory-card-top">
           <div className="memory-card-type">
@@ -246,7 +251,6 @@ function MemoryCard({
               Type: {entry.type}
             </span>
           </div>
-
           <div className="memory-confidence-group">
             <ConfidenceBar value={entry.confidence} color={colors.indicator} />
             <span className="memory-confidence">
@@ -261,10 +265,8 @@ function MemoryCard({
             </button>
           </div>
         </div>
-
         <div className="memory-card-title">{entry.title}</div>
         <div className="memory-card-desc">{entry.description}</div>
-
         <div className="memory-card-time">
           <span className="memory-time-icon">◷</span>
           {entry.created_at}
@@ -309,7 +311,6 @@ function SearchIcon() {
     </svg>
   )
 }
-
 function RefreshIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -323,7 +324,6 @@ function RefreshIcon() {
     </svg>
   )
 }
-
 function DeleteIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
@@ -334,6 +334,22 @@ function DeleteIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
+    </svg>
+  )
+}
+function PanelIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+      <rect
+        x="1"
+        y="1"
+        width="12"
+        height="12"
+        rx="2"
+        stroke="currentColor"
+        strokeWidth="1.2"
+      />
+      <path d="M9 1v12" stroke="currentColor" strokeWidth="1.2" />
     </svg>
   )
 }
