@@ -39,8 +39,6 @@ export const metadata: Metadata = {
   },
   description: "AGI-level personal assistant command interface",
   manifest: "/manifest.json",
-  themeColor: "#000000",
-  viewport,
   icons: [
     {
       rel: "icon",

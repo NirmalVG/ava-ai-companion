@@ -9,6 +9,7 @@
 
 import Sidebar from "@/components/SideBar"
 import ContextPanel from "./ContextPanel"
+import BottomNav from "./BottomNav"
 import {
   SidebarInset,
   SidebarProvider,
@@ -41,6 +42,7 @@ function ShellLayout({
       <Sidebar />
       <SidebarInset>{children}</SidebarInset>
       <ContextPanel />
+      <BottomNav />
     </div>
   )
 }

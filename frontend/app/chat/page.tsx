@@ -1,8 +1,9 @@
 "use client"
 
-import { useState, useRef, useEffect, useCallback } from "react"
+import { useState, useRef, useEffect, useCallback, type ReactNode } from "react"
 import ReactMarkdown from "react-markdown"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import { useVoiceInput } from "@/hooks/useVoiceInput"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 const USER_ID = "operator_01"
@@ -25,6 +26,7 @@ interface Message {
   toolSteps?: ToolStep[]
   thinkingText?: string
   timestamp: string
+  imageUrl?: string // base64 data URL for display
 }
 
 function uid() {
@@ -53,11 +55,23 @@ export default function ChatPage() {
   const [isStreaming, setIsStreaming] = useState(false)
   const [activeTab, setActiveTab] = useState<"live" | "archive">("live")
   const [historyLoading, setHistoryLoading] = useState(true)
+  const [pendingImage, setPendingImage] = useState<File | null>(null)
+  const [pendingImageUrl, setPendingImageUrl] = useState<string | null>(null)
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // ── Load conversation history on mount ───────────────────────
+  // ── Voice input ───────────────────────────────────────────────
+  const { voiceState, interimText, toggleListening, isUnsupported } =
+    useVoiceInput({
+      onTranscript: (text) => {
+        setInput(text)
+        setTimeout(() => sendMessage(text), 100)
+      },
+    })
+
+  // ── Load history on mount ─────────────────────────────────────
   useEffect(() => {
     async function loadHistory() {
       try {
@@ -65,7 +79,6 @@ export default function ChatPage() {
         if (!res.ok) return
         const history: { role: string; content: string }[] = await res.json()
         if (history.length === 0) return
-
         const loaded: Message[] = history.map((m) => ({
           id: uid(),
           role: m.role === "assistant" ? "ava" : "user",
@@ -74,7 +87,7 @@ export default function ChatPage() {
         }))
         setMessages(loaded)
       } catch {
-        // silently fail — chat still works without history
+        // silently fail
       } finally {
         setHistoryLoading(false)
       }
@@ -100,15 +113,150 @@ export default function ChatPage() {
     try {
       await fetch(MEMORY_URL, { method: "DELETE" })
     } catch {
-      // continue even if backend fails
+      // continue
     }
     setMessages([])
   }, [])
 
-  // ── Send message ──────────────────────────────────────────────
+  // ── Handle image file selection ───────────────────────────────
+  const handleFileSelect = useCallback((file: File) => {
+    if (!file.type.startsWith("image/")) return
+    setPendingImage(file)
+    const url = URL.createObjectURL(file)
+    setPendingImageUrl(url)
+  }, [])
+
+  const clearPendingImage = useCallback(() => {
+    if (pendingImageUrl) URL.revokeObjectURL(pendingImageUrl)
+    setPendingImage(null)
+    setPendingImageUrl(null)
+    if (fileInputRef.current) fileInputRef.current.value = ""
+  }, [pendingImageUrl])
+
+  // ── Send image to vision endpoint ─────────────────────────────
+  const sendImageMessage = useCallback(
+    async (file: File, prompt: string) => {
+      const previewUrl = URL.createObjectURL(file)
+
+      const userMsg: Message = {
+        id: uid(),
+        role: "user",
+        content: prompt || "Analyze this image",
+        timestamp: now(),
+        imageUrl: previewUrl,
+      }
+      const avaId = uid()
+      const avaMsg: Message = {
+        id: avaId,
+        role: "ava",
+        content: "",
+        isStreaming: true,
+        timestamp: now(),
+      }
+
+      setMessages((p) => [...p, userMsg, avaMsg])
+      setInput("")
+      clearPendingImage()
+      setIsStreaming(true)
+
+      let finalContent = ""
+
+      try {
+        const formData = new FormData()
+        formData.append("file", file)
+        formData.append("prompt", prompt || "Describe this image in detail.")
+
+        const res = await fetch(`${API_BASE}/vision/analyze`, {
+          method: "POST",
+          body: formData,
+        })
+
+        if (!res.ok || !res.body) throw new Error("Vision request failed")
+
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          const lines = decoder.decode(value, { stream: true }).split("\n")
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue
+            const raw = line.slice(6)
+            if (raw === "[DONE]") break
+            try {
+              const ev = JSON.parse(raw)
+              if (ev.type === "token") {
+                finalContent += ev.content
+                setMessages((p) =>
+                  p.map((m) =>
+                    m.id === avaId
+                      ? { ...m, content: m.content + ev.content }
+                      : m,
+                  ),
+                )
+              } else if (ev.type === "error") {
+                setMessages((p) =>
+                  p.map((m) =>
+                    m.id === avaId
+                      ? {
+                          ...m,
+                          content: `Error: ${ev.content}`,
+                          isStreaming: false,
+                        }
+                      : m,
+                  ),
+                )
+                return
+              }
+            } catch {
+              continue
+            }
+          }
+        }
+      } catch (err) {
+        setMessages((p) =>
+          p.map((m) =>
+            m.id === avaId
+              ? {
+                  ...m,
+                  content: "Failed to analyze image.",
+                  isStreaming: false,
+                }
+              : m,
+          ),
+        )
+      } finally {
+        setMessages((p) =>
+          p.map((m) => (m.id === avaId ? { ...m, isStreaming: false } : m)),
+        )
+        setIsStreaming(false)
+        inputRef.current?.focus()
+
+        if (finalContent) {
+          fetch(MEMORY_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ role: "assistant", content: finalContent }),
+          }).catch(() => {})
+        }
+      }
+    },
+    [clearPendingImage],
+  )
+
+  // ── Send text message ─────────────────────────────────────────
   const sendMessage = useCallback(
     async (text?: string) => {
       const content = (text ?? input).trim()
+
+      // If image is pending, send to vision endpoint instead
+      if (pendingImage) {
+        await sendImageMessage(pendingImage, content)
+        return
+      }
+
       if (!content || isStreaming) return
 
       const userMsg: Message = {
@@ -132,7 +280,6 @@ export default function ChatPage() {
       setInput("")
       setIsStreaming(true)
 
-      // Persist user message (fire-and-forget)
       fetch(MEMORY_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -217,7 +364,7 @@ export default function ChatPage() {
                   m.id === avaId
                     ? {
                         ...m,
-                        content: `⚠ ${ev.content ?? "Something went wrong."}`,
+                        content: `${ev.content ?? "Something went wrong."}`,
                         isStreaming: false,
                       }
                     : m,
@@ -250,7 +397,6 @@ export default function ChatPage() {
         setIsStreaming(false)
         inputRef.current?.focus()
 
-        // Persist Ava's final response (fire-and-forget)
         if (finalContent) {
           fetch(MEMORY_URL, {
             method: "POST",
@@ -260,7 +406,7 @@ export default function ChatPage() {
         }
       }
     },
-    [input, isStreaming, messages],
+    [input, isStreaming, messages, pendingImage, sendImageMessage],
   )
 
   const handleKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -270,7 +416,20 @@ export default function ChatPage() {
     }
   }
 
-  // ── Render ───────────────────────────────────────────────────
+  // ── Drag and drop onto chat area ──────────────────────────────
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    const file = e.dataTransfer.files[0]
+    if (file?.type.startsWith("image/")) {
+      handleFileSelect(file)
+    }
+  }
+
+  // ── Render ────────────────────────────────────────────────────
   return (
     <>
       {/* Page header */}
@@ -315,7 +474,11 @@ export default function ChatPage() {
       </header>
 
       {/* Chat area */}
-      <div className="chat-area">
+      <div
+        className="chat-area"
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
         {historyLoading && (
           <div className="chat-history-loading">Loading session...</div>
         )}
@@ -335,13 +498,72 @@ export default function ChatPage() {
           ),
         )}
 
+        {/* Voice interim */}
+        {voiceState === "listening" && (
+          <div className="voice-interim">
+            <span className="voice-interim-dot" />
+            {interimText || "Listening..."}
+          </div>
+        )}
+        {voiceState === "processing" && (
+          <div className="voice-interim voice-interim-processing">
+            Processing voice input...
+          </div>
+        )}
+
         <div ref={bottomRef} />
       </div>
 
-      {/* Input */}
+      {/* Pending image preview */}
+      {pendingImageUrl && (
+        <div className="image-preview-bar">
+          <div className="image-preview-inner">
+            <img
+              src={pendingImageUrl}
+              alt="Pending upload"
+              className="image-preview-thumb"
+            />
+            <div className="image-preview-info">
+              <span className="image-preview-name">
+                {pendingImage?.name ?? "image"}
+              </span>
+              <span className="image-preview-hint">
+                Add a prompt or press Transmit to analyze
+              </span>
+            </div>
+            <button
+              className="image-preview-remove"
+              onClick={clearPendingImage}
+              type="button"
+              title="Remove image"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden file input */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file) handleFileSelect(file)
+        }}
+      />
+
+      {/* Input area */}
       <div className="chat-input-area">
-        <div className="chat-input-box">
-          <button className="chat-input-icon" title="Attach" type="button">
+        <div className={`chat-input-box ${pendingImageUrl ? "has-image" : ""}`}>
+          <button
+            className={`chat-input-icon ${pendingImageUrl ? "attach-active" : ""}`}
+            title="Attach image"
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+          >
             <AttachIcon />
           </button>
           <textarea
@@ -349,17 +571,33 @@ export default function ChatPage() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKey}
-            placeholder="SEND COMMAND..."
+            placeholder={
+              pendingImageUrl
+                ? "Ask about this image... (or press Transmit)"
+                : "SEND COMMAND..."
+            }
             disabled={isStreaming}
             rows={1}
           />
-          <button className="chat-input-icon" title="Voice" type="button">
-            <MicIcon />
+          <button
+            className={`chat-input-icon ${voiceState === "listening" ? "voice-active" : ""}`}
+            title={
+              isUnsupported
+                ? "Voice not supported in this browser"
+                : voiceState === "listening"
+                  ? "Stop recording"
+                  : "Start voice input"
+            }
+            type="button"
+            onClick={toggleListening}
+            disabled={isUnsupported || isStreaming}
+          >
+            {voiceState === "listening" ? <WaveformIcon /> : <MicIcon />}
           </button>
           <button
             className={`transmit-btn ${isStreaming ? "streaming" : ""}`}
             onClick={() => sendMessage()}
-            disabled={isStreaming || !input.trim()}
+            disabled={isStreaming || (!input.trim() && !pendingImage)}
             type="button"
           >
             {isStreaming ? "Processing..." : "Transmit"}
@@ -375,6 +613,15 @@ export default function ChatPage() {
 function UserMessage({ message }: { message: Message }) {
   return (
     <div className="fade-up">
+      {message.imageUrl && (
+        <div className="message-image-container">
+          <img
+            src={message.imageUrl}
+            alt="Uploaded"
+            className="message-image"
+          />
+        </div>
+      )}
       <div className="message-user">{message.content}</div>
       {message.timestamp && (
         <div className="message-meta">OPERATOR • {message.timestamp}</div>
@@ -389,18 +636,15 @@ function AvaMessage({ message }: { message: Message }) {
   return (
     <div className="fade-up">
       <div className="message-ava">
-        {/* Thinking line */}
         {message.isStreaming && message.thinkingText && (
           <div className="message-ava-thinking">{message.thinkingText}</div>
         )}
 
-        {/* Tool call blocks */}
         {hasTools &&
           message.toolSteps!.map((step, i) => (
             <ToolCallBlock key={i} step={step} />
           ))}
 
-        {/* Final text with markdown */}
         {(message.content || message.isStreaming) && (
           <div
             className={`message-ava-text ${
@@ -431,6 +675,33 @@ function AvaMessage({ message }: { message: Message }) {
 
 function ToolCallBlock({ step }: { step: ToolStep }) {
   const isDone = step.result !== undefined
+  const isCodeExec = step.name === "execute_code"
+  const isFileOp = step.name === "read_file" || step.name === "write_file"
+
+  let execResult: {
+    stdout?: string
+    stderr?: string
+    exit_code?: number
+    success?: boolean
+    error?: string
+  } | null = null
+
+  if (isCodeExec && step.result) {
+    try {
+      execResult = JSON.parse(step.result)
+    } catch {
+      execResult = null
+    }
+  }
+
+  const hasFailed = execResult && !execResult.success
+
+  const codeContent: string =
+    typeof step.args.code === "string"
+      ? step.args.code
+      : step.args.code
+        ? String(step.args.code)
+        : ""
 
   const formattedArgs = escapeHtml(JSON.stringify(step.args, null, 2))
   const highlighted = formattedArgs
@@ -442,19 +713,84 @@ function ToolCallBlock({ step }: { step: ToolStep }) {
     <div className="tool-call-block">
       <div className="tool-call-header">
         <div className="tool-call-name">
-          <span className="tool-call-glyph">⌬</span>
+          <span className="tool-call-glyph">
+            {isCodeExec ? "▶" : isFileOp ? "◎" : "⌬"}
+          </span>
           {step.name}
         </div>
         {isDone ? (
-          <span className="badge-success">Success</span>
+          hasFailed ? (
+            <span className="badge-error">Failed</span>
+          ) : (
+            <span className="badge-success">Success</span>
+          )
         ) : (
           <span className="badge-pending">Running</span>
         )}
       </div>
-      <div
-        className="tool-call-json"
-        dangerouslySetInnerHTML={{ __html: highlighted }}
-      />
+
+      {renderCodeBlock(isCodeExec, step.args.code, codeContent)}
+
+      {!isCodeExec && (
+        <div
+          className="tool-call-json"
+          dangerouslySetInnerHTML={{ __html: highlighted }}
+        />
+      )}
+
+      {isCodeExec && execResult && (
+        <div className="tool-call-exec-result">
+          {execResult.stdout && (
+            <div>
+              <div
+                className="tool-call-result-label"
+                style={{ color: "var(--color-green)" }}
+              >
+                Output
+              </div>
+              <pre className="tool-call-result-pre tool-call-result-stdout">
+                {execResult.stdout}
+              </pre>
+            </div>
+          )}
+          {execResult.stderr && (
+            <div>
+              <div
+                className="tool-call-result-label"
+                style={{ color: "var(--color-red)" }}
+              >
+                Stderr
+              </div>
+              <pre className="tool-call-result-pre tool-call-result-stderr">
+                {execResult.stderr}
+              </pre>
+            </div>
+          )}
+          {execResult.error && (
+            <div>
+              <div
+                className="tool-call-result-label"
+                style={{ color: "var(--color-red)" }}
+              >
+                Error
+              </div>
+              <pre className="tool-call-result-pre tool-call-result-stderr">
+                {execResult.error}
+              </pre>
+            </div>
+          )}
+          <div
+            className="tool-call-exit-code"
+            style={{
+              color: execResult.success
+                ? "var(--color-green-dim)"
+                : "var(--color-red)",
+            }}
+          >
+            Exit code: {execResult.exit_code}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -493,6 +829,24 @@ function escapeHtml(value: string) {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
+}
+
+function CodeBlock({ code }: { code: string }): ReactNode {
+  return (
+    <div className="tool-call-code">
+      <div className="tool-call-code-label">Code</div>
+      <pre className="tool-call-code-pre">{code}</pre>
+    </div>
+  )
+}
+
+function renderCodeBlock(
+  isCodeExec: boolean,
+  code: unknown,
+  codeContent: string,
+): ReactNode {
+  if (!isCodeExec || !code) return null
+  return <CodeBlock code={codeContent} />
 }
 
 // ─── Icons ────────────────────────────────────────────────────────
@@ -590,6 +944,19 @@ function MicIcon() {
         d="M2.5 7a4.5 4.5 0 009 0M7 11.5V13"
         stroke="currentColor"
         strokeWidth="1.2"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
+function WaveformIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <path
+        d="M1 8h2M4 5v6M7 3v10M10 5v6M13 7v2M15 8h1"
+        stroke="var(--color-teal)"
+        strokeWidth="1.4"
         strokeLinecap="round"
       />
     </svg>

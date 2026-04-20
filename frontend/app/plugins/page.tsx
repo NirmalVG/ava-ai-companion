@@ -1,150 +1,196 @@
 "use client"
 
-/*
-  app/plugins/page.tsx — Plugin Marketplace + Skills Studio modal
-
-  Matches Image 3:
-  - Breadcrumb header: "AVA COMMAND / MARKETPLACE / ALL PLUGINS"
-  - Hero: "Extend your Neural Capacity." with teal "Neural Capacity"
-  - Registry version badge + module count
-  - 3-column plugin grid: icon + stars + name + by + tags + INSTALL/INSTALLED button
-  - Active plugin has green "ACTIVE" badge
-
-  Matches Image 4 (modal):
-  - "INITIALIZE NEW SKILL" title
-  - Two options: UPLOAD SKILL.MD (drag & drop) | LOAD VIA SKILLS.SH (terminal)
-  - ABORT INITIALIZATION footer action
-*/
-
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
+const USER_ID = "operator_01"
 
 // ─── Types ───────────────────────────────────────────────────────
 interface Plugin {
   id: string
+  tool_name: string
   name: string
   by: string
   icon: string
   iconBg: string
-  stars: number // out of 5
+  stars: number
   tags: string[]
+  category: string
   installed: boolean
-  category: "tools" | "data" | "media" | "finance" | "dev"
 }
 
-// ─── Plugin data ─────────────────────────────────────────────────
-const PLUGINS: Plugin[] = [
+// ─── Built-in plugin catalogue ────────────────────────────────────
+const BUILTIN_PLUGINS: Omit<Plugin, "installed">[] = [
   {
-    id: "github",
-    name: "GitHub Issues",
-    by: "GitHub Inc.",
+    id: "github_repo",
+    tool_name: "github_repo",
+    name: "GitHub Repo",
+    by: "Built-in",
     icon: "⌥",
     iconBg: "#1a2230",
     stars: 5,
-    tags: ["Read/Write", "Automation"],
-    installed: false,
+    tags: ["Read Only", "Dev"],
     category: "dev",
   },
   {
-    id: "stripe",
-    name: "Stripe",
-    by: "Stripe Engineering",
+    id: "dictionary",
+    tool_name: "dictionary",
+    name: "Dictionary",
+    by: "Free Dictionary API",
+    icon: "≡",
+    iconBg: "#1a1a1a",
+    stars: 4,
+    tags: ["Read Only", "Language"],
+    category: "tools",
+  },
+  {
+    id: "crypto_price",
+    tool_name: "crypto_price",
+    name: "Crypto Price",
+    by: "CoinGecko",
     icon: "◈",
     iconBg: "#0d1f2d",
-    stars: 5,
-    tags: ["Financials", "Webhooks"],
-    installed: false,
+    stars: 4,
+    tags: ["Read Only", "Finance"],
     category: "finance",
   },
   {
-    id: "weather",
-    name: "Weather",
-    by: "OpenWeatherAPI",
-    icon: "☀",
-    iconBg: "#1f1a0d",
-    stars: 4,
-    tags: ["Read Only", "Geo-Data"],
-    installed: false,
-    category: "data",
-  },
-  {
     id: "notion",
+    tool_name: "notion",
     name: "Notion",
     by: "Notion Labs",
     icon: "≡",
     iconBg: "#1a1a1a",
     stars: 5,
     tags: ["Full Access", "Syncing"],
-    installed: true,
     category: "tools",
   },
   {
-    id: "spotify",
-    name: "Spotify",
-    by: "Spotify AB",
-    icon: "♫",
-    iconBg: "#0d1f10",
-    stars: 4,
-    tags: ["Media", "Control"],
-    installed: false,
-    category: "media",
+    id: "github",
+    tool_name: "github",
+    name: "GitHub Issues",
+    by: "GitHub Inc.",
+    icon: "⌥",
+    iconBg: "#1a2230",
+    stars: 5,
+    tags: ["Read/Write", "Automation"],
+    category: "dev",
   },
   {
-    id: "finance",
-    name: "Custom Finance Tracker",
-    by: "Independent Dev",
-    icon: "↗",
-    iconBg: "#0d1a12",
-    stars: 4,
-    tags: ["Read/Write", "Encrypted"],
-    installed: false,
+    id: "stripe",
+    tool_name: "stripe",
+    name: "Stripe",
+    by: "Stripe Engineering",
+    icon: "◈",
+    iconBg: "#0d1f2d",
+    stars: 5,
+    tags: ["Financials", "Webhooks"],
     category: "finance",
   },
   {
+    id: "weather",
+    tool_name: "weather",
+    name: "Weather",
+    by: "wttr.in",
+    icon: "☀",
+    iconBg: "#1f1a0d",
+    stars: 4,
+    tags: ["Read Only", "Geo-Data"],
+    category: "data",
+  },
+  {
     id: "calendar",
+    tool_name: "calendar",
     name: "Google Calendar",
     by: "Google LLC",
     icon: "◷",
     iconBg: "#1a0d0d",
     stars: 5,
     tags: ["Read/Write", "Events"],
-    installed: false,
     category: "tools",
   },
   {
     id: "supabase",
+    tool_name: "supabase",
     name: "Supabase",
     by: "Supabase Inc.",
     icon: "⚡",
     iconBg: "#0d1f1a",
     stars: 5,
     tags: ["Database", "Realtime"],
-    installed: false,
-    category: "dev",
-  },
-  {
-    id: "linear",
-    name: "Linear",
-    by: "Linear Systems",
-    icon: "▲",
-    iconBg: "#0f0d1f",
-    stars: 4,
-    tags: ["Issues", "Automation"],
-    installed: false,
     category: "dev",
   },
 ]
 
-// ─── Component ───────────────────────────────────────────────────
+// ─── Main Component ───────────────────────────────────────────────
 export default function PluginsPage() {
-  const [plugins, setPlugins] = useState<Plugin[]>(PLUGINS)
+  const [installedTools, setInstalledTools] = useState<Set<string>>(new Set())
+  const [loadingInstall, setLoadingInstall] = useState<string | null>(null)
   const [showSkillModal, setShowModal] = useState(false)
   const [searchQuery, setSearch] = useState("")
   const [dragOver, setDragOver] = useState(false)
 
-  const installed = plugins.filter((p) => p.installed).length
+  const installed = installedTools.size
 
-  const filtered = plugins.filter(
+  // Load installed plugins on mount
+  useEffect(() => {
+    async function loadInstalled() {
+      try {
+        const res = await fetch(`${API_BASE}/plugins/${USER_ID}`)
+        if (!res.ok) return
+        const data: { tool_name: string; installed: boolean }[] =
+          await res.json()
+        const installedSet = new Set(
+          data.filter((p) => p.installed).map((p) => p.tool_name),
+        )
+        setInstalledTools(installedSet)
+      } catch {
+        // silently fail — UI still works
+      }
+    }
+    loadInstalled()
+  }, [])
+
+  const handleInstall = async (tool_name: string) => {
+    setLoadingInstall(tool_name)
+    try {
+      const res = await fetch(`${API_BASE}/plugins/${USER_ID}/install`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tool_name }),
+      })
+      if (res.ok) {
+        setInstalledTools((prev) => new Set([...prev, tool_name]))
+      }
+    } catch {
+      // silently fail
+    } finally {
+      setLoadingInstall(null)
+    }
+  }
+
+  const handleUninstall = async (tool_name: string) => {
+    setLoadingInstall(tool_name)
+    try {
+      const res = await fetch(`${API_BASE}/plugins/${USER_ID}/${tool_name}`, {
+        method: "DELETE",
+      })
+      if (res.ok) {
+        setInstalledTools((prev) => {
+          const next = new Set(prev)
+          next.delete(tool_name)
+          return next
+        })
+      }
+    } catch {
+      // silently fail
+    } finally {
+      setLoadingInstall(null)
+    }
+  }
+
+  const filtered = BUILTIN_PLUGINS.filter(
     (p) =>
       searchQuery === "" ||
       p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -152,15 +198,9 @@ export default function PluginsPage() {
       p.tags.some((t) => t.toLowerCase().includes(searchQuery.toLowerCase())),
   )
 
-  const handleInstall = (id: string) => {
-    setPlugins((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, installed: true } : p)),
-    )
-  }
-
   return (
     <>
-      {/* Header with breadcrumb */}
+      {/* Header */}
       <header className="page-header">
         <SidebarTrigger />
         <div className="page-header-title-group">
@@ -204,7 +244,7 @@ export default function PluginsPage() {
 
       {/* Page body */}
       <div className="page-body">
-        {/* Hero section */}
+        {/* Hero */}
         <div className="plugins-hero">
           <div className="plugins-hero-title">
             Extend your{" "}
@@ -225,7 +265,9 @@ export default function PluginsPage() {
               <div className="plugins-stat">
                 <div className="plugins-stat-label">REGISTRY_VER: 4.0.2</div>
                 <div className="plugins-stat-value-row">
-                  <span className="plugins-stat-value">1,248</span>
+                  <span className="plugins-stat-value">
+                    {BUILTIN_PLUGINS.length}
+                  </span>
                   <span className="plugins-stat-unit">MODULES</span>
                 </div>
               </div>
@@ -241,7 +283,6 @@ export default function PluginsPage() {
               </div>
             </div>
 
-            {/* Add skill button */}
             <button
               className="plugins-hero-action"
               onClick={() => setShowModal(true)}
@@ -257,9 +298,14 @@ export default function PluginsPage() {
           {filtered.map((plugin, i) => (
             <PluginCard
               key={plugin.id}
-              plugin={plugin}
+              plugin={{
+                ...plugin,
+                installed: installedTools.has(plugin.tool_name),
+              }}
               delay={i * 35}
-              onInstall={() => handleInstall(plugin.id)}
+              onInstall={() => handleInstall(plugin.tool_name)}
+              onUninstall={() => handleUninstall(plugin.tool_name)}
+              loading={loadingInstall === plugin.tool_name}
             />
           ))}
 
@@ -288,10 +334,14 @@ function PluginCard({
   plugin,
   delay,
   onInstall,
+  onUninstall,
+  loading,
 }: {
   plugin: Plugin
   delay: number
   onInstall: () => void
+  onUninstall: () => void
+  loading: boolean
 }) {
   return (
     <div
@@ -330,19 +380,20 @@ function PluginCard({
         ))}
       </div>
 
-      {/* Install button */}
+      {/* Install / Uninstall button */}
       <button
         className={`install-btn ${plugin.installed ? "installed" : ""}`}
-        onClick={plugin.installed ? undefined : onInstall}
-        disabled={plugin.installed}
+        onClick={plugin.installed ? onUninstall : onInstall}
+        disabled={loading}
+        type="button"
       >
-        {plugin.installed ? "Installed" : "Install Plugin"}
+        {loading ? "..." : plugin.installed ? "Uninstall" : "Install Plugin"}
       </button>
     </div>
   )
 }
 
-// ─── Skills Studio Modal (Image 4) ───────────────────────────────
+// ─── Skills Studio Modal ──────────────────────────────────────────
 function SkillsStudioModal({
   onClose,
   dragOver,
@@ -365,14 +416,8 @@ function SkillsStudioModal({
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      {/* Stop click propagation so inner click doesn't close */}
       <div className="modal-box" onClick={(e) => e.stopPropagation()}>
-        {/* Close button */}
-        <button
-          className="modal-close-btn"
-          onClick={onClose}
-          type="button"
-        >
+        <button className="modal-close-btn" onClick={onClose} type="button">
           X
         </button>
 
@@ -381,7 +426,6 @@ function SkillsStudioModal({
           Select ingestion method for neural integration.
         </div>
 
-        {/* Two options */}
         <div className="modal-options">
           {/* Option 1: Upload SKILL.MD */}
           <div
@@ -410,7 +454,6 @@ function SkillsStudioModal({
               Directly inject markdown definitions and logical parameters into
               the core library.
             </div>
-
             <div
               className="dropzone"
               style={{
@@ -438,7 +481,6 @@ function SkillsStudioModal({
               Initialize automated routines and system-level scripts via shell
               interface.
             </div>
-
             <div className="terminal-input">
               <div className="terminal-dots">
                 <div className="dot dot-red" />
@@ -455,7 +497,6 @@ function SkillsStudioModal({
           </div>
         </div>
 
-        {/* Footer */}
         <div className="modal-footer">
           <button className="abort-btn" onClick={onClose}>
             Abort Initialization
@@ -486,6 +527,7 @@ function SearchIcon() {
     </svg>
   )
 }
+
 function BellIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -503,6 +545,7 @@ function BellIcon() {
     </svg>
   )
 }
+
 function GridIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
@@ -545,6 +588,7 @@ function GridIcon() {
     </svg>
   )
 }
+
 function PlusIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
@@ -557,6 +601,7 @@ function PlusIcon() {
     </svg>
   )
 }
+
 function UploadIcon() {
   return (
     <svg
@@ -591,6 +636,7 @@ function UploadIcon() {
     </svg>
   )
 }
+
 function TerminalIcon() {
   return (
     <svg
