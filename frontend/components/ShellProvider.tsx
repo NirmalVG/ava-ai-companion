@@ -1,8 +1,9 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Sidebar from "@/components/SideBar"
 import ContextPanel from "./ContextPanel"
+import { useIsMobile } from "@/hooks/use-mobile"
 import {
   SidebarInset,
   SidebarProvider,
@@ -25,7 +26,12 @@ export default function ShellProvider({
 
 function ShellLayout({ children }: { children: React.ReactNode }) {
   const { open: sidebarOpen } = useSidebar()
-  const [contextOpen, setContextOpen] = useState(true)
+  const isMobile = useIsMobile()
+  const [contextOpen, setContextOpen] = useState(!isMobile)
+
+  useEffect(() => {
+    setContextOpen(!isMobile)
+  }, [isMobile])
 
   return (
     <div className={`app-shell ${sidebarOpen ? "sidebar-open" : ""}`}>

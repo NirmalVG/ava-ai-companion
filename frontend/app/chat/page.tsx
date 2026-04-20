@@ -29,6 +29,15 @@ interface Message {
   imageUrl?: string
 }
 
+interface ArchiveSession {
+  id: string
+  message_count: number
+  first_message: string
+  last_message: string
+  created_at: string
+  updated_at: string
+}
+
 function uid() {
   return Math.random().toString(36).slice(2, 10)
 }
@@ -56,6 +65,17 @@ export default function ChatPage() {
   const [pendingImage, setPendingImage] = useState<File | null>(null)
   const [pendingImageUrl, setPendingImageUrl] = useState<string | null>(null)
 
+  // Archive state
+  const [archiveSessions, setArchiveSessions] = useState<ArchiveSession[]>([])
+  const [archiveLoading, setArchiveLoading] = useState(false)
+  const [selectedSession, setSelectedSession] = useState<ArchiveSession | null>(
+    null,
+  )
+  const [sessionMessages, setSessionMessages] = useState<
+    { role: string; content: string }[]
+  >([])
+  const [sessionLoading, setSessionLoading] = useState(false)
+
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -70,6 +90,7 @@ export default function ChatPage() {
       },
     })
 
+  // Load history
   useEffect(() => {
     async function loadHistory() {
       try {
@@ -93,6 +114,79 @@ export default function ChatPage() {
     }
     loadHistory()
   }, [])
+
+  // Load archive when tab switches
+  useEffect(() => {
+    if (activeTab !== "archive") return
+    async function loadArchive() {
+      setArchiveLoading(true)
+      try {
+        const res = await fetch(`${API_BASE}/memory/archive/${USER_ID}`)
+        if (!res.ok) return
+        setArchiveSessions(await res.json())
+      } catch {
+        // silently fail
+      } finally {
+        setArchiveLoading(false)
+      }
+    }
+    loadArchive()
+  }, [activeTab])
+
+  const loadSession = async (session: ArchiveSession) => {
+    setSelectedSession(session)
+    setSessionLoading(true)
+    try {
+      const res = await fetch(
+        `${API_BASE}/memory/archive/${USER_ID}/${session.id}`,
+      )
+      if (!res.ok) return
+      setSessionMessages(await res.json())
+    } catch {
+      // silently fail
+    } finally {
+      setSessionLoading(false)
+    }
+  }
+
+  const deleteSession = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    try {
+      await fetch(`${API_BASE}/memory/archive/${USER_ID}/${id}`, {
+        method: "DELETE",
+      })
+      setArchiveSessions((prev) => prev.filter((s) => s.id !== id))
+      if (selectedSession?.id === id) {
+        setSelectedSession(null)
+        setSessionMessages([])
+      }
+    } catch {}
+  }
+
+  const restoreSession = async (session: ArchiveSession) => {
+    setSessionLoading(true)
+    try {
+      const res = await fetch(
+        `${API_BASE}/memory/archive/${USER_ID}/${session.id}`,
+      )
+      if (!res.ok) return
+      const msgs: { role: string; content: string }[] = await res.json()
+      setMessages(
+        msgs.map((m) => ({
+          id: uid(),
+          role: m.role === "assistant" ? "ava" : "user",
+          content: m.content,
+          timestamp: "",
+        })),
+      )
+      setActiveTab("live")
+      setSelectedSession(null)
+    } catch {
+      // silently fail
+    } finally {
+      setSessionLoading(false)
+    }
+  }
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -266,8 +360,8 @@ export default function ChatPage() {
         role: role === "ava" ? "assistant" : role,
         content: c,
       }))
-
       let finalContent = ""
+
       try {
         const res = await fetch(`${API_BASE}/chat/stream`, {
           method: "POST",
@@ -438,129 +532,445 @@ export default function ChatPage() {
         </div>
       </header>
 
-      <div
-        className="chat-area"
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          e.preventDefault()
-          const f = e.dataTransfer.files[0]
-          if (f?.type.startsWith("image/")) handleFileSelect(f)
-        }}
-      >
-        {historyLoading && (
-          <div className="chat-history-loading">Loading session...</div>
-        )}
-        {!historyLoading && messages.length === 0 && (
-          <EmptyState onSuggest={sendMessage} suggestions={SUGGESTIONS} />
-        )}
-        {messages.map((msg) =>
-          msg.role === "user" ? (
-            <UserMessage key={msg.id} message={msg} />
-          ) : (
-            <AvaMessage key={msg.id} message={msg} />
-          ),
-        )}
-        {voiceState === "listening" && (
-          <div className="voice-interim">
-            <span className="voice-interim-dot" />
-            {interimText || "Listening..."}
-          </div>
-        )}
-        {voiceState === "processing" && (
-          <div className="voice-interim voice-interim-processing">
-            Processing voice input...
-          </div>
-        )}
-        <div ref={bottomRef} />
-      </div>
-
-      {pendingImageUrl && (
-        <div className="image-preview-bar">
-          <div className="image-preview-inner">
-            <img
-              src={pendingImageUrl}
-              alt="Pending"
-              className="image-preview-thumb"
-            />
-            <div className="image-preview-info">
-              <span className="image-preview-name">
-                {pendingImage?.name ?? "image"}
-              </span>
-              <span className="image-preview-hint">
-                Add a prompt or press Transmit to analyze
-              </span>
-            </div>
-            <button
-              className="image-preview-remove"
-              onClick={clearPendingImage}
-              type="button"
+      {/* ── Archive View ─────────────────────────────────────── */}
+      {activeTab === "archive" && (
+        <div
+          style={{ flex: 1, display: "flex", minHeight: 0, overflow: "hidden" }}
+        >
+          {/* Session list */}
+          <div
+            style={{
+              width: 280,
+              flexShrink: 0,
+              borderRight: "1px solid var(--color-border-subtle)",
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                padding: "14px 16px",
+                borderBottom: "1px solid var(--color-border-subtle)",
+                flexShrink: 0,
+              }}
             >
-              ✕
-            </button>
+              <div
+                style={{
+                  fontSize: 9,
+                  letterSpacing: "0.2em",
+                  textTransform: "uppercase",
+                  color: "var(--color-text-secondary)",
+                }}
+              >
+                Archived Sessions
+              </div>
+            </div>
+            <div style={{ flex: 1, overflowY: "auto", padding: "8px" }}>
+              {archiveLoading && (
+                <div
+                  style={{
+                    fontSize: 10,
+                    color: "var(--color-text-secondary)",
+                    textAlign: "center",
+                    padding: "20px 0",
+                    letterSpacing: "0.1em",
+                  }}
+                >
+                  Loading archive...
+                </div>
+              )}
+              {!archiveLoading && archiveSessions.length === 0 && (
+                <div
+                  style={{
+                    fontSize: 10,
+                    color: "var(--color-text-secondary)",
+                    textAlign: "center",
+                    padding: "20px 0",
+                    letterSpacing: "0.05em",
+                    lineHeight: 1.5,
+                  }}
+                >
+                  No archived sessions yet.
+                </div>
+              )}
+              {!archiveLoading &&
+                archiveSessions.map((session) => (
+                  <div
+                    key={session.id}
+                    onClick={() => loadSession(session)}
+                    style={{
+                      padding: "10px 12px",
+                      borderRadius: 6,
+                      border: `1px solid ${selectedSession?.id === session.id ? "var(--color-teal-dim)" : "var(--color-border-default)"}`,
+                      background:
+                        selectedSession?.id === session.id
+                          ? "var(--color-teal-trace)"
+                          : "var(--color-bg-surface)",
+                      cursor: "pointer",
+                      marginBottom: 6,
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "flex-start",
+                        gap: 6,
+                        marginBottom: 6,
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 10,
+                          color: "var(--color-teal)",
+                          letterSpacing: "0.05em",
+                          flex: 1,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {session.first_message || "Empty session"}
+                      </div>
+                      <button
+                        onClick={(e) => deleteSession(session.id, e)}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          color: "var(--color-text-secondary)",
+                          cursor: "pointer",
+                          fontSize: 10,
+                          padding: "0 2px",
+                          flexShrink: 0,
+                          lineHeight: 1,
+                        }}
+                        title="Delete session"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 9,
+                        color: "var(--color-text-secondary)",
+                        marginBottom: 4,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {session.last_message}
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: 8,
+                          color: "var(--color-text-muted)",
+                          letterSpacing: "0.08em",
+                        }}
+                      >
+                        {session.created_at}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 8,
+                          color: "var(--color-text-muted)",
+                          letterSpacing: "0.05em",
+                        }}
+                      >
+                        {session.message_count} msgs
+                      </span>
+                    </div>
+                  </div>
+                ))}
+            </div>
+          </div>
+
+          {/* Session viewer */}
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+            }}
+          >
+            {!selectedSession ? (
+              <div
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 12,
+                  color: "var(--color-text-secondary)",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 40,
+                    opacity: 0.1,
+                    fontFamily: "var(--font-display)",
+                    fontWeight: 700,
+                    letterSpacing: "0.1em",
+                  }}
+                >
+                  ARCHIVE
+                </div>
+                <div style={{ fontSize: 11, letterSpacing: "0.05em" }}>
+                  Select a session to view
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* Session header */}
+                <div
+                  style={{
+                    padding: "12px 20px",
+                    borderBottom: "1px solid var(--color-border-subtle)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    flexShrink: 0,
+                  }}
+                >
+                  <div>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: "var(--color-text-primary)",
+                        letterSpacing: "0.05em",
+                      }}
+                    >
+                      {selectedSession.first_message || "Session"}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 9,
+                        color: "var(--color-text-secondary)",
+                        marginTop: 2,
+                        letterSpacing: "0.05em",
+                      }}
+                    >
+                      {selectedSession.created_at} ·{" "}
+                      {selectedSession.message_count} messages
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => restoreSession(selectedSession)}
+                    disabled={sessionLoading}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "6px 14px",
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 10,
+                      letterSpacing: "0.1em",
+                      textTransform: "uppercase",
+                      border: "1px solid var(--color-teal-dim)",
+                      borderRadius: 4,
+                      background: "var(--color-teal-trace)",
+                      color: "var(--color-teal)",
+                      cursor: sessionLoading ? "default" : "pointer",
+                      opacity: sessionLoading ? 0.5 : 1,
+                    }}
+                  >
+                    <RestoreIcon /> Restore Session
+                  </button>
+                </div>
+
+                {/* Messages */}
+                <div
+                  style={{
+                    flex: 1,
+                    overflowY: "auto",
+                    padding: "16px 20px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 12,
+                  }}
+                >
+                  {sessionLoading && (
+                    <div
+                      style={{
+                        fontSize: 10,
+                        color: "var(--color-text-secondary)",
+                        textAlign: "center",
+                        padding: "20px 0",
+                      }}
+                    >
+                      Loading session...
+                    </div>
+                  )}
+                  {!sessionLoading &&
+                    sessionMessages.map((msg, i) => (
+                      <div key={i} className="fade-up">
+                        {msg.role === "user" ? (
+                          <div className="message-user">{msg.content}</div>
+                        ) : (
+                          <div className="message-ava">
+                            <div className="message-ava-text">
+                              <ReactMarkdown>{msg.content}</ReactMarkdown>
+                            </div>
+                          </div>
+                        )}
+                        <div className="message-meta">
+                          {msg.role === "user" ? "OPERATOR" : "AVA SYSTEM"} ·
+                          archived
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
 
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        style={{ display: "none" }}
-        onChange={(e) => {
-          const f = e.target.files?.[0]
-          if (f) handleFileSelect(f)
-        }}
-      />
+      {/* ── Live Chat View ────────────────────────────────────── */}
+      {activeTab === "live" && (
+        <>
+          <div
+            className="chat-area"
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault()
+              const f = e.dataTransfer.files[0]
+              if (f?.type.startsWith("image/")) handleFileSelect(f)
+            }}
+          >
+            {historyLoading && (
+              <div className="chat-history-loading">Loading session...</div>
+            )}
+            {!historyLoading && messages.length === 0 && (
+              <EmptyState onSuggest={sendMessage} suggestions={SUGGESTIONS} />
+            )}
+            {messages.map((msg) =>
+              msg.role === "user" ? (
+                <UserMessage key={msg.id} message={msg} />
+              ) : (
+                <AvaMessage key={msg.id} message={msg} />
+              ),
+            )}
+            {voiceState === "listening" && (
+              <div className="voice-interim">
+                <span className="voice-interim-dot" />
+                {interimText || "Listening..."}
+              </div>
+            )}
+            {voiceState === "processing" && (
+              <div className="voice-interim voice-interim-processing">
+                Processing voice input...
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
 
-      <div className="chat-input-area">
-        <div className={`chat-input-box ${pendingImageUrl ? "has-image" : ""}`}>
-          <button
-            className={`chat-input-icon ${pendingImageUrl ? "attach-active" : ""}`}
-            title="Attach image"
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <AttachIcon />
-          </button>
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKey}
-            placeholder={
-              pendingImageUrl ? "Ask about this image..." : "SEND COMMAND..."
-            }
-            disabled={isStreaming}
-            rows={1}
+          {pendingImageUrl && (
+            <div className="image-preview-bar">
+              <div className="image-preview-inner">
+                <img
+                  src={pendingImageUrl}
+                  alt="Pending"
+                  className="image-preview-thumb"
+                />
+                <div className="image-preview-info">
+                  <span className="image-preview-name">
+                    {pendingImage?.name ?? "image"}
+                  </span>
+                  <span className="image-preview-hint">
+                    Add a prompt or press Transmit to analyze
+                  </span>
+                </div>
+                <button
+                  className="image-preview-remove"
+                  onClick={clearPendingImage}
+                  type="button"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          )}
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            style={{ display: "none" }}
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (f) handleFileSelect(f)
+            }}
           />
-          <button
-            className={`chat-input-icon ${voiceState === "listening" ? "voice-active" : ""}`}
-            title={
-              isUnsupported
-                ? "Voice not supported"
-                : voiceState === "listening"
-                  ? "Stop recording"
-                  : "Start voice input"
-            }
-            type="button"
-            onClick={toggleListening}
-            disabled={isUnsupported || isStreaming}
-          >
-            {voiceState === "listening" ? <WaveformIcon /> : <MicIcon />}
-          </button>
-          <button
-            className={`transmit-btn ${isStreaming ? "streaming" : ""}`}
-            onClick={() => sendMessage()}
-            disabled={isStreaming || (!input.trim() && !pendingImage)}
-            type="button"
-          >
-            {isStreaming ? "Processing..." : "Transmit"}
-          </button>
-        </div>
-      </div>
+
+          <div className="chat-input-area">
+            <div
+              className={`chat-input-box ${pendingImageUrl ? "has-image" : ""}`}
+            >
+              <button
+                className={`chat-input-icon ${pendingImageUrl ? "attach-active" : ""}`}
+                title="Attach image"
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <AttachIcon />
+              </button>
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKey}
+                placeholder={
+                  pendingImageUrl
+                    ? "Ask about this image..."
+                    : "SEND COMMAND..."
+                }
+                disabled={isStreaming}
+                rows={1}
+              />
+              <button
+                className={`chat-input-icon ${voiceState === "listening" ? "voice-active" : ""}`}
+                title={
+                  isUnsupported
+                    ? "Voice not supported"
+                    : voiceState === "listening"
+                      ? "Stop recording"
+                      : "Start voice input"
+                }
+                type="button"
+                onClick={toggleListening}
+                disabled={isUnsupported || isStreaming}
+              >
+                {voiceState === "listening" ? <WaveformIcon /> : <MicIcon />}
+              </button>
+              <button
+                className={`transmit-btn ${isStreaming ? "streaming" : ""}`}
+                onClick={() => sendMessage()}
+                disabled={isStreaming || (!input.trim() && !pendingImage)}
+                type="button"
+              >
+                {isStreaming ? "Processing..." : "Transmit"}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </>
   )
 }
+
+// ── Sub-components ────────────────────────────────────────────────
 
 function UserMessage({ message }: { message: Message }) {
   return (
@@ -639,11 +1049,12 @@ function ToolCallBlock({ step }: { step: ToolStep }) {
     .replace(/: "([^"]+)"/g, ': <span class="json-str">"$1"</span>')
     .replace(/: (\d+)/g, ': <span class="json-num">$1</span>')
   const codeArg = step.args.code
-  const codeText = codeArg == null ? undefined :
-    typeof codeArg === "string"
-      ? codeArg
-      : JSON.stringify(codeArg, null, 2)
-
+  const codeText =
+    codeArg == null
+      ? undefined
+      : typeof codeArg === "string"
+        ? codeArg
+        : JSON.stringify(codeArg, null, 2)
   return (
     <div className="tool-call-block">
       <div className="tool-call-header">
@@ -768,6 +1179,7 @@ function escapeHtml(value: string) {
     .replaceAll(">", "&gt;")
 }
 
+// ── Icons ─────────────────────────────────────────────────────────
 function SearchIcon() {
   return (
     <svg
@@ -875,6 +1287,19 @@ function PanelIcon() {
         strokeWidth="1.2"
       />
       <path d="M9 1v12" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  )
+}
+function RestoreIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+      <path
+        d="M1 6a5 5 0 105-5H4M4 1L2 3l2 2"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   )
 }

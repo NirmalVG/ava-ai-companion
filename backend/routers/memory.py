@@ -7,6 +7,7 @@ import asyncio
 from fastapi import APIRouter, Depends, BackgroundTasks
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
+from sqlalchemy import func
 
 from database import get_db
 from models import Conversation, Message, MemoryEntry
@@ -43,6 +44,14 @@ class MemoryEntryOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+class ConversationSummary(BaseModel):
+    id: str
+    message_count: int
+    first_message: str
+    last_message: str
+    created_at: str
+    updated_at: str
 
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -123,6 +132,18 @@ def clear_conversation(user_id: str, db: Session = Depends(get_db)):
         db.commit()
     return {"status": "cleared"}
 
+@router.post("/conversation/{user_id}/new", status_code=201)
+def start_new_conversation(user_id: str, db: Session = Depends(get_db)):
+    """
+    Creates a brand new conversation session.
+    Called when user explicitly starts a new chat.
+    """
+    conv = Conversation(id=str(uuid.uuid4()), user_id=user_id)
+    db.add(conv)
+    db.commit()
+    db.refresh(conv)
+    return {"id": conv.id, "status": "created"}
+
 
 # ── Memory Vault routes ───────────────────────────────────────────
 @router.get("/vault/{user_id}", response_model=list[MemoryEntryOut])
@@ -165,5 +186,80 @@ def delete_memory_entry(
     )
     if entry:
         db.delete(entry)
+        db.commit()
+    return {"status": "deleted"}
+
+@router.get("/archive/{user_id}", response_model=list[ConversationSummary])
+def list_archived_conversations(user_id: str, db: Session = Depends(get_db)):
+    """
+    Returns all past conversation sessions for this user,
+    ordered by most recent first.
+    """
+    conversations = (
+        db.query(Conversation)
+        .filter(Conversation.user_id == user_id)
+        .order_by(Conversation.created_at.desc())
+        .all()
+    )
+
+    result = []
+    for conv in conversations:
+        if not conv.messages:
+            continue
+
+        first_user = next(
+            (m.content for m in conv.messages if m.role == "user"), ""
+        )
+        last_msg = conv.messages[-1].content if conv.messages else ""
+
+        result.append(ConversationSummary(
+            id=conv.id,
+            message_count=len(conv.messages),
+            first_message=first_user[:80] + ("..." if len(first_user) > 80 else ""),
+            last_message=last_msg[:80] + ("..." if len(last_msg) > 80 else ""),
+            created_at=conv.created_at.strftime("%b %d, %Y // %H:%M"),
+            updated_at=conv.updated_at.strftime("%b %d, %Y // %H:%M") if conv.updated_at else "",
+        ))
+
+    return result
+
+
+@router.get("/archive/{user_id}/{conversation_id}", response_model=list[MessageOut])
+def get_archived_conversation(
+    user_id: str,
+    conversation_id: str,
+    db: Session = Depends(get_db),
+):
+    """Load full messages for a specific archived conversation."""
+    conv = (
+        db.query(Conversation)
+        .filter(
+            Conversation.user_id == user_id,
+            Conversation.id == conversation_id,
+        )
+        .first()
+    )
+    if not conv:
+        return []
+    return [MessageOut(role=m.role, content=m.content) for m in conv.messages]
+
+
+@router.delete("/archive/{user_id}/{conversation_id}", status_code=200)
+def delete_archived_conversation(
+    user_id: str,
+    conversation_id: str,
+    db: Session = Depends(get_db),
+):
+    """Delete a specific archived conversation."""
+    conv = (
+        db.query(Conversation)
+        .filter(
+            Conversation.user_id == user_id,
+            Conversation.id == conversation_id,
+        )
+        .first()
+    )
+    if conv:
+        db.delete(conv)
         db.commit()
     return {"status": "deleted"}
