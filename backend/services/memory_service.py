@@ -75,7 +75,7 @@ async def extract_and_save_memories(
                     ),
                 },
             ],
-            max_tokens=512,
+            max_tokens=1024,
             temperature=0.2,   # low temp for consistent structured output
             stream=False,
         )

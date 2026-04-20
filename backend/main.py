@@ -15,7 +15,7 @@ load_dotenv(BASE_DIR / ".env")
 
 # 2. IMPORT INTERNAL MODULES AFTER ENV IS LOADED
 from database import init_db
-from routers import chat, memory
+from routers import chat, memory, plugins, settings, voice, vision
 
 app = FastAPI(
     title="Ava API",
@@ -41,7 +41,10 @@ init_db()
 # 4. REGISTER ROUTERS
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
 app.include_router(memory.router, prefix="/memory", tags=["memory"])
-
+app.include_router(plugins.router, prefix="/plugins", tags=["plugins"])
+app.include_router(settings.router, prefix="/settings", tags=["settings"])
+app.include_router(voice.router, prefix="/voice", tags=["voice"])
+app.include_router(vision.router, prefix="/vision", tags=["vision"])
 
 @app.get("/healthz", tags=["ops"])
 def health_check():

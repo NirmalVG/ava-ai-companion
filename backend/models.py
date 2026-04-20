@@ -56,3 +56,28 @@ class MemoryEntry(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
+
+class Plugin(Base):
+    __tablename__ = "plugins"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, index=True, nullable=False)
+    name = Column(String, nullable=False)
+    description = Column(String, nullable=False)
+    tool_name = Column(String, nullable=False)   # snake_case, used in tool registry
+    base_url = Column(String, nullable=False)     # where the plugin lives
+    enabled = Column(String, default="true")      # "true" | "false"
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+class UserSettings(Base):
+    __tablename__ = "user_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(String, unique=True, index=True, nullable=False)
+    tone = Column(String, default="balanced")        # "casual" | "balanced" | "professional" | "concise"
+    language = Column(String, default="en")
+    memory_enabled = Column(String, default="true")  # "true" | "false"
+    retention_days = Column(Integer, default=30)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
