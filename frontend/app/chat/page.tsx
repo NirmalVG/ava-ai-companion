@@ -485,7 +485,9 @@ export default function ChatPage() {
     <>
       <header className="page-header">
         <SidebarTrigger />
-        <span className="page-header-brand">AVA COMMAND</span>
+        <span className="page-header-brand" style={{ display: "none" }}>
+          AVA COMMAND
+        </span>
         <div className="header-tabs">
           <button
             className={`header-tab ${activeTab === "live" ? "active" : ""}`}
