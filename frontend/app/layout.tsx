@@ -6,6 +6,7 @@
 */
 
 import type { Metadata } from "next"
+import Script from "next/script"
 import { Rajdhani, Space_Mono, Geist } from "next/font/google"
 import "./globals.css"
 import ShellProvider from "@/components/ShellProvider"
@@ -107,7 +108,22 @@ export default function RootLayout({
         "font-sans",
         geist.variable,
       )}
+      suppressHydrationWarning
     >
+      <head>
+        <Script
+          id="theme-script"
+          strategy="beforeInteractive"
+          dangerouslySetInnerHTML={{
+            __html: `
+            try {
+              const t = localStorage.getItem('ava-theme');
+              if (t) document.documentElement.setAttribute('data-theme', t);
+            } catch(e) {}
+          `,
+          }}
+        />
+      </head>
       <body>
         <ShellProvider>{children}</ShellProvider>
       </body>

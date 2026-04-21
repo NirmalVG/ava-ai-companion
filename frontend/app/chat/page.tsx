@@ -5,6 +5,7 @@ import ReactMarkdown from "react-markdown"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { useVoiceInput } from "@/hooks/useVoiceInput"
 import { useContextPanel } from "@/components/ShellProvider"
+import ThemeToggle from "@/components/ThemeToggle"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 const USER_ID = "operator_01"
@@ -511,9 +512,7 @@ export default function ChatPage() {
           >
             <ClearIcon />
           </button>
-          <button className="icon-btn" title="Notifications">
-            <BellIcon />
-          </button>
+          <ThemeToggle />
           <button
             className="icon-btn"
             title={contextOpen ? "Close context panel" : "Open context panel"}

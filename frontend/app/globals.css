@@ -3170,3 +3170,351 @@ body {
     max-width: 100%;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   LIGHT MODE THEME
+═══════════════════════════════════════════════════════════════ */
+[data-theme="light"] {
+  /* Backgrounds */
+  --color-bg-void: #f0f4ff;
+  --color-bg-base: #f5f7ff;
+  --color-bg-sidebar: #eef1fb;
+  --color-bg-surface: #ffffff;
+  --color-bg-elevated: #e8edf8;
+  --color-bg-overlay: #f0f4ff;
+
+  /* Borders */
+  --color-border-subtle: #d0d8f0;
+  --color-border-default: #b8c4e0;
+  --color-border-bright: #8899cc;
+  --color-border-teal: rgba(0, 140, 200, 0.3);
+
+  /* Accents */
+  --color-teal: #0077bb;
+  --color-teal-dim: #005599;
+  --color-teal-trace: rgba(0, 119, 187, 0.08);
+  --color-teal-glow: rgba(0, 119, 187, 0.15);
+
+  --color-green: #00aa66;
+  --color-green-dim: #008855;
+  --color-green-trace: rgba(0, 170, 102, 0.1);
+
+  --color-orange: #dd5500;
+  --color-orange-trace: rgba(221, 85, 0, 0.1);
+
+  --color-red: #cc2222;
+  --color-purple: #6633cc;
+  --color-purple-surface: #f0eaff;
+
+  /* Typography */
+  --color-text-primary: #1a2340;
+  --color-text-secondary: #4a5878;
+  --color-text-muted: #8899bb;
+  --color-text-teal: #0077bb;
+  --color-text-green: #00aa66;
+}
+
+/* Light mode specific overrides */
+[data-theme="light"] body {
+  background: var(--color-bg-base);
+  color: var(--color-text-primary);
+}
+
+[data-theme="light"] .sidebar::before {
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 119, 187, 0.025) 2px,
+    rgba(0, 119, 187, 0.025) 4px
+  );
+}
+
+[data-theme="light"] .message-user {
+  background: #ede8ff;
+  border-color: rgba(102, 51, 204, 0.25);
+}
+
+[data-theme="light"] .tool-call-block {
+  background: #f0f4ff;
+}
+
+[data-theme="light"] .tool-call-json {
+  background: #e8edf8;
+  border-color: var(--color-border-default);
+}
+
+[data-theme="light"] .json-key {
+  color: #1155aa;
+}
+[data-theme="light"] .json-str {
+  color: #227722;
+}
+[data-theme="light"] .json-num {
+  color: #aa5500;
+}
+
+[data-theme="light"] .message-ava {
+  border-color: var(--color-border-default);
+  background: #ffffff;
+}
+
+[data-theme="light"] .message-ava-text {
+  color: var(--color-text-primary);
+}
+[data-theme="light"] .message-ava-thinking {
+  color: var(--color-text-secondary);
+}
+
+[data-theme="light"] .chat-suggestion-btn {
+  background: #ffffff;
+  border-color: var(--color-border-default);
+  color: var(--color-text-secondary);
+}
+
+[data-theme="light"] .chat-suggestion-btn:hover {
+  border-color: var(--color-teal-dim);
+  color: var(--color-text-primary);
+  background: var(--color-bg-elevated);
+}
+
+[data-theme="light"] .chat-input-box {
+  background: #ffffff;
+  border-color: var(--color-border-default);
+}
+
+[data-theme="light"] .chat-input-box textarea {
+  color: var(--color-text-primary);
+}
+
+[data-theme="light"] .transmit-btn {
+  background: var(--color-teal);
+  color: #ffffff;
+}
+
+[data-theme="light"] .memory-card {
+  background: #ffffff;
+  border-color: var(--color-border-default);
+}
+
+[data-theme="light"] .memory-card-desc {
+  color: var(--color-text-secondary);
+}
+[data-theme="light"] .memory-card-title {
+  color: var(--color-text-primary);
+}
+
+[data-theme="light"] .plugin-card {
+  background: #ffffff;
+  border-color: var(--color-border-default);
+}
+
+[data-theme="light"] .plugin-name {
+  color: var(--color-text-primary);
+}
+[data-theme="light"] .plugin-by {
+  color: var(--color-text-secondary);
+}
+
+[data-theme="light"] .install-btn {
+  background: var(--color-teal);
+  border-color: var(--color-teal);
+  color: #ffffff;
+}
+
+[data-theme="light"] .install-btn.installed {
+  background: transparent;
+  border-color: var(--color-border-default);
+  color: var(--color-text-secondary);
+}
+
+[data-theme="light"] .modal-box {
+  background: #ffffff;
+  border-color: var(--color-border-bright);
+}
+
+[data-theme="light"] .modal-option {
+  background: #f5f7ff;
+  border-color: var(--color-border-default);
+}
+
+[data-theme="light"] .dropzone {
+  border-color: var(--color-border-bright);
+  color: var(--color-text-secondary);
+}
+
+[data-theme="light"] .terminal-input {
+  background: #1a2340;
+}
+
+[data-theme="light"] .context-panel {
+  background: var(--color-bg-sidebar);
+  border-color: var(--color-border-subtle);
+}
+
+[data-theme="light"] .snippet-card {
+  background: var(--color-bg-elevated);
+  border-color: var(--color-border-default);
+}
+
+[data-theme="light"] .tool-call-code-pre {
+  background: #e8edf8;
+  color: var(--color-text-primary);
+}
+
+[data-theme="light"] .tool-call-result-stdout {
+  background: #efffec;
+  border-color: var(--color-green-dim);
+  color: #1a4a2a;
+}
+
+[data-theme="light"] .tool-call-result-stderr {
+  background: #fff0f0;
+  border-color: rgba(204, 34, 34, 0.3);
+  color: #8b0000;
+}
+
+[data-theme="light"] .header-search {
+  background: #ffffff;
+  border-color: var(--color-border-default);
+}
+
+[data-theme="light"] .header-search input {
+  color: var(--color-text-primary);
+}
+
+[data-theme="light"] .icon-btn {
+  background: #ffffff;
+  border-color: var(--color-border-default);
+  color: var(--color-text-secondary);
+}
+
+[data-theme="light"] .icon-btn:hover {
+  border-color: var(--color-border-bright);
+  color: var(--color-text-primary);
+}
+
+[data-theme="light"] .page-hero-title {
+  color: var(--color-text-primary);
+}
+[data-theme="light"] .page-hero-sub {
+  color: var(--color-text-secondary);
+}
+
+[data-theme="light"] .filter-tab {
+  border-color: var(--color-border-default);
+  color: var(--color-text-secondary);
+}
+
+[data-theme="light"] .filter-tab.active {
+  background: rgba(0, 119, 187, 0.08);
+  border-color: var(--color-teal-dim);
+  color: var(--color-teal);
+}
+
+[data-theme="light"] .memory-tag {
+  background: var(--color-bg-elevated);
+  border-color: var(--color-border-default);
+  color: var(--color-text-muted);
+}
+
+[data-theme="light"] .confidence-bar {
+  background: var(--color-bg-elevated);
+}
+
+[data-theme="light"] .badge-success {
+  background: rgba(0, 170, 102, 0.1);
+  border-color: var(--color-green-dim);
+  color: var(--color-green);
+}
+
+[data-theme="light"] .badge-pending {
+  background: rgba(221, 85, 0, 0.1);
+  border-color: var(--color-orange);
+  color: var(--color-orange);
+}
+
+[data-theme="light"] .badge-error {
+  background: rgba(204, 34, 34, 0.1);
+  border-color: var(--color-red);
+  color: var(--color-red);
+}
+
+[data-theme="light"] .voice-interim {
+  background: var(--color-bg-elevated);
+  border-color: var(--color-border-teal);
+}
+
+[data-theme="light"] .image-preview-bar {
+  background: var(--color-bg-elevated);
+}
+
+[data-theme="light"] .image-preview-inner {
+  background: #ffffff;
+  border-color: var(--color-border-teal);
+}
+
+[data-theme="light"] .bottom-nav {
+  background: var(--color-bg-sidebar);
+  border-color: var(--color-border-default);
+}
+
+[data-theme="light"] .user-card {
+  background: var(--color-bg-elevated);
+  border-color: var(--color-border-default);
+}
+
+[data-theme="light"] .nav-item:hover {
+  background: rgba(0, 119, 187, 0.06);
+}
+
+[data-theme="light"] .nav-item.active {
+  background: rgba(0, 119, 187, 0.08);
+  color: var(--color-teal);
+}
+
+[data-theme="light"] .header-tab.active {
+  color: var(--color-teal);
+  border-bottom-color: var(--color-teal);
+}
+
+[data-theme="light"] .chat-empty-state-mark {
+  color: var(--color-teal);
+  opacity: 0.12;
+}
+
+[data-theme="light"] .message-meta {
+  color: var(--color-text-muted);
+}
+
+[data-theme="light"] .plugin-tag {
+  border-color: var(--color-border-default);
+  color: var(--color-text-secondary);
+}
+
+[data-theme="light"] .star {
+  color: var(--color-teal);
+}
+[data-theme="light"] .star-empty {
+  color: var(--color-text-muted);
+}
+
+[data-theme="light"] .modal-title {
+  color: var(--color-text-primary);
+}
+[data-theme="light"] .modal-sub {
+  color: var(--color-text-secondary);
+}
+[data-theme="light"] .abort-btn {
+  color: var(--color-text-secondary);
+}
+
+[data-theme="light"] .abort-btn:hover {
+  color: var(--color-red);
+}
+
+[data-theme="light"] .memory-status-badge {
+  background: var(--color-bg-elevated);
+  border-color: var(--color-border-default);
+  color: var(--color-text-secondary);
+}

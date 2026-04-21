@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { useContextPanel } from "@/components/ShellProvider"
+import ThemeToggle from "@/components/ThemeToggle"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 const USER_ID = "operator_01"
@@ -122,6 +123,7 @@ export default function MemoryVaultPage() {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
+          <ThemeToggle />
           <button
             className="icon-btn"
             title="Refresh"
@@ -129,6 +131,7 @@ export default function MemoryVaultPage() {
           >
             <RefreshIcon />
           </button>
+
           <button
             className="icon-btn"
             title={contextOpen ? "Close context panel" : "Open context panel"}

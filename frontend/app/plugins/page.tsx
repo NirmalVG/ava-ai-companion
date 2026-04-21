@@ -1,11 +1,19 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { useContextPanel } from "@/components/ShellProvider"
+import ThemeToggle from "@/components/ThemeToggle"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 const USER_ID = "operator_01"
+
+const ALLOWED_COMMANDS: Record<string, string> = {
+  list: "List all registered skills",
+  status: "Show skill status",
+  test: "Test skill connectivity",
+  reload: "Reload skill registry",
+}
 
 interface Plugin {
   id: string
@@ -127,7 +135,6 @@ export default function PluginsPage() {
   const [loadingInstall, setLoadingInstall] = useState<string | null>(null)
   const [showSkillModal, setShowModal] = useState(false)
   const [searchQuery, setSearch] = useState("")
-  const [dragOver, setDragOver] = useState(false)
   const { contextOpen, setContextOpen } = useContextPanel()
 
   useEffect(() => {
@@ -207,12 +214,7 @@ export default function PluginsPage() {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <button className="icon-btn">
-            <BellIcon />
-          </button>
-          <button className="icon-btn">
-            <GridIcon />
-          </button>
+          <ThemeToggle />
           <button
             className="icon-btn"
             style={{
@@ -310,16 +312,13 @@ export default function PluginsPage() {
       </div>
 
       {showSkillModal && (
-        <SkillsStudioModal
-          onClose={() => setShowModal(false)}
-          dragOver={dragOver}
-          setDragOver={setDragOver}
-        />
+        <SkillsStudioModal onClose={() => setShowModal(false)} />
       )}
     </>
   )
 }
 
+// ── Plugin Card ───────────────────────────────────────────────────
 function PluginCard({
   plugin,
   delay,
@@ -373,27 +372,149 @@ function PluginCard({
   )
 }
 
-function SkillsStudioModal({
-  onClose,
-  dragOver,
-  setDragOver,
-}: {
-  onClose: () => void
-  dragOver: boolean
-  setDragOver: (v: boolean) => void
-}) {
+// ── Skills Studio Modal ───────────────────────────────────────────
+function SkillsStudioModal({ onClose }: { onClose: () => void }) {
   const [terminalCmd, setTerminalCmd] = useState("")
+  const [terminalOutput, setTerminalOutput] = useState(
+    "AVA Skill Terminal v1.0\nType 'list', 'status', 'test', or 'reload'\n─────────────────────────────────────\n$ ",
+  )
+  const [terminalLoading, setTerminalLoading] = useState(false)
+  const [dragOver, setDragOver] = useState(false)
+  const [uploadStatus, setUploadStatus] = useState<{
+    type: "idle" | "loading" | "success" | "error"
+    message: string
+  }>({ type: "idle", message: "" })
+  const [registeredSkills, setRegisteredSkills] = useState<
+    {
+      tool_name: string
+      name: string
+      description: string
+      enabled: boolean
+      source: string
+    }[]
+  >([])
+
+  const terminalRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const loadSkills = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/skills/list/${USER_ID}`)
+      if (res.ok) setRegisteredSkills(await res.json())
+    } catch {}
+  }
+
+  useEffect(() => {
+    loadSkills()
+  }, [])
+
+  useEffect(() => {
+    if (terminalRef.current) {
+      terminalRef.current.scrollTop = terminalRef.current.scrollHeight
+    }
+  }, [terminalOutput])
+
+  const handleFileUpload = async (file: File) => {
+    if (!file.name.endsWith(".md")) {
+      setUploadStatus({
+        type: "error",
+        message: "Only .md files are accepted.",
+      })
+      return
+    }
+    setUploadStatus({ type: "loading", message: `Parsing ${file.name}...` })
+    try {
+      const formData = new FormData()
+      formData.append("file", file)
+      formData.append("user_id", USER_ID)
+      const res = await fetch(`${API_BASE}/skills/upload`, {
+        method: "POST",
+        body: formData,
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setUploadStatus({
+          type: "error",
+          message: data.detail || "Upload failed.",
+        })
+        return
+      }
+      setUploadStatus({
+        type: "success",
+        message: `Skill "${data.name}" registered as tool "${data.tool_name}".`,
+      })
+      loadSkills()
+    } catch {
+      setUploadStatus({
+        type: "error",
+        message: "Network error. Check backend connection.",
+      })
+    }
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragOver(false)
+    const file = e.dataTransfer.files[0]
+    if (file) handleFileUpload(file)
+  }
+
+  const handleTerminalSubmit = async () => {
+    const cmd = terminalCmd.trim()
+    if (!cmd) return
+    setTerminalOutput((prev) => prev + cmd + "\n")
+    setTerminalCmd("")
+    setTerminalLoading(true)
+    try {
+      const res = await fetch(`${API_BASE}/skills/terminal`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: cmd }),
+      })
+      const data = await res.json()
+      setTerminalOutput((prev) => prev + data.output + "\n$ ")
+    } catch {
+      setTerminalOutput(
+        (prev) => prev + "Error: Could not connect to backend.\n$ ",
+      )
+    } finally {
+      setTerminalLoading(false)
+    }
+  }
+
+  const handleTerminalKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") handleTerminalSubmit()
+  }
+
+  const removeSkill = async (tool_name: string) => {
+    try {
+      await fetch(`${API_BASE}/skills/remove/${USER_ID}/${tool_name}`, {
+        method: "DELETE",
+      })
+      setRegisteredSkills((prev) =>
+        prev.filter((s) => s.tool_name !== tool_name),
+      )
+    } catch {}
+  }
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-box" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="modal-box"
+        style={{ width: 900, maxWidth: "95vw" }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <button className="modal-close-btn" onClick={onClose} type="button">
           X
         </button>
         <div className="modal-title">Initialize New Skill</div>
         <div className="modal-sub">
-          Select ingestion method for neural integration.
+          Register a custom skill from a SKILL.md file or via the terminal.
+          Registered skills become callable tools in every conversation.
         </div>
+
         <div className="modal-options">
+          {/* ── Upload SKILL.MD ───────────────────────────── */}
           <div
             className="modal-option"
             onDragOver={(e) => {
@@ -401,13 +522,8 @@ function SkillsStudioModal({
               setDragOver(true)
             }}
             onDragLeave={() => setDragOver(false)}
-            onDrop={(e) => {
-              e.preventDefault()
-              setDragOver(false)
-            }}
-            style={{
-              borderColor: dragOver ? "var(--color-teal-dim)" : undefined,
-            }}
+            onDrop={handleDrop}
+            style={{ borderColor: dragOver ? "var(--color-teal)" : undefined }}
           >
             <div
               className="modal-option-icon"
@@ -420,17 +536,137 @@ function SkillsStudioModal({
             </div>
             <div className="modal-option-title">Upload Skill.md</div>
             <div className="modal-option-desc">
-              Inject markdown definitions into the core library.
+              Create a markdown file with frontmatter defining your tool. Ava
+              will parse and register it automatically.
             </div>
+
             <div
               className="dropzone"
               style={{
                 borderColor: dragOver ? "var(--color-teal)" : undefined,
+                color: dragOver ? "var(--color-teal)" : undefined,
+                cursor: "pointer",
+                marginBottom: 10,
               }}
+              onClick={() => fileInputRef.current?.click()}
             >
-              Drag & Drop File Here
+              {uploadStatus.type === "loading"
+                ? uploadStatus.message
+                : "Drag & Drop or Click to Upload"}
+            </div>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".md"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) handleFileUpload(f)
+              }}
+            />
+
+            {uploadStatus.type === "success" && (
+              <div
+                style={{
+                  fontSize: 10,
+                  padding: "8px 10px",
+                  background: "rgba(0,255,148,0.08)",
+                  border: "1px solid var(--color-green-dim)",
+                  borderRadius: 4,
+                  color: "var(--color-green)",
+                  letterSpacing: "0.03em",
+                  lineHeight: 1.5,
+                  marginBottom: 10,
+                }}
+              >
+                ✓ {uploadStatus.message}
+              </div>
+            )}
+            {uploadStatus.type === "error" && (
+              <div
+                style={{
+                  fontSize: 10,
+                  padding: "8px 10px",
+                  background: "rgba(255,68,68,0.08)",
+                  border: "1px solid rgba(255,68,68,0.3)",
+                  borderRadius: 4,
+                  color: "var(--color-red)",
+                  letterSpacing: "0.03em",
+                  lineHeight: 1.5,
+                  marginBottom: 10,
+                }}
+              >
+                ✕ {uploadStatus.message}
+              </div>
+            )}
+
+            {/* Template */}
+            <div>
+              <div
+                style={{
+                  fontSize: 8,
+                  letterSpacing: "0.15em",
+                  textTransform: "uppercase",
+                  color: "var(--color-text-secondary)",
+                  marginBottom: 6,
+                }}
+              >
+                Template
+              </div>
+              <pre
+                style={{
+                  background: "var(--color-bg-void)",
+                  border: "1px solid var(--color-border-subtle)",
+                  borderRadius: 4,
+                  padding: "10px 12px",
+                  fontSize: 9,
+                  fontFamily: "var(--font-mono)",
+                  color: "var(--color-text-secondary)",
+                  lineHeight: 1.6,
+                  overflow: "auto",
+                  maxHeight: 130,
+                }}
+              >
+                {`---
+name: My Custom Tool
+tool_name: my_custom_tool
+description: What this tool does
+---
+
+## Parameters
+- query (string, required): The input
+
+## Example
+Ask Ava: "Use my custom tool to..."`}
+              </pre>
+              <button
+                type="button"
+                onClick={() => {
+                  const t = `---\nname: My Custom Tool\ntool_name: my_custom_tool\ndescription: What this tool does\n---\n\n## Parameters\n- query (string, required): The input\n\n## Example\nAsk Ava: "Use my custom tool to..."`
+                  navigator.clipboard.writeText(t).catch(() => {})
+                }}
+                style={{
+                  marginTop: 6,
+                  width: "100%",
+                  padding: "5px 10px",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 9,
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                  border: "1px solid var(--color-border-default)",
+                  borderRadius: 3,
+                  background: "transparent",
+                  color: "var(--color-text-secondary)",
+                  cursor: "pointer",
+                }}
+              >
+                Copy Template
+              </button>
             </div>
           </div>
+
+          {/* ── Terminal ──────────────────────────────────── */}
           <div className="modal-option">
             <div
               className="modal-option-icon"
@@ -443,26 +679,235 @@ function SkillsStudioModal({
             </div>
             <div className="modal-option-title">Load via Skills.sh</div>
             <div className="modal-option-desc">
-              Initialize automated routines via shell interface.
+              Manage skills via the terminal. List, test, reload, or check
+              status.
             </div>
-            <div className="terminal-input">
-              <div className="terminal-dots">
-                <div className="dot dot-red" />
-                <div className="dot dot-yellow" />
-                <div className="dot dot-green" />
-              </div>
+
+            {/* Output */}
+            <div
+              ref={terminalRef}
+              style={{
+                background: "var(--color-bg-void)",
+                border: "1px solid var(--color-border-default)",
+                borderRadius: 6,
+                padding: "10px 12px",
+                fontFamily: "var(--font-mono)",
+                fontSize: 10,
+                color: "var(--color-text-secondary)",
+                lineHeight: 1.7,
+                marginBottom: 6,
+                height: 140,
+                overflowY: "auto",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+              }}
+            >
+              {terminalOutput}
+              {terminalLoading && (
+                <span style={{ color: "var(--color-teal)" }}>█</span>
+              )}
+            </div>
+
+            {/* Input */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                background: "var(--color-bg-void)",
+                border: "1px solid var(--color-border-default)",
+                borderRadius: 4,
+                padding: "6px 10px",
+                marginBottom: 8,
+              }}
+            >
+              <span
+                style={{
+                  fontSize: 10,
+                  color: "var(--color-teal)",
+                  flexShrink: 0,
+                }}
+              >
+                $
+              </span>
               <input
-                className="terminal-cmd terminal-cmd-input"
-                placeholder="INPUT TERMINAL CMD..."
                 value={terminalCmd}
                 onChange={(e) => setTerminalCmd(e.target.value)}
+                onKeyDown={handleTerminalKey}
+                placeholder="Type a command..."
+                disabled={terminalLoading}
+                style={{
+                  flex: 1,
+                  background: "transparent",
+                  border: "none",
+                  outline: "none",
+                  color: "var(--color-text-primary)",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 10,
+                }}
               />
+              <button
+                type="button"
+                onClick={handleTerminalSubmit}
+                disabled={terminalLoading || !terminalCmd.trim()}
+                style={{
+                  padding: "2px 10px",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 9,
+                  letterSpacing: "0.1em",
+                  textTransform: "uppercase",
+                  border: "1px solid var(--color-teal-dim)",
+                  borderRadius: 3,
+                  background: "var(--color-teal-trace)",
+                  color: "var(--color-teal)",
+                  cursor: terminalLoading ? "default" : "pointer",
+                  opacity: terminalLoading || !terminalCmd.trim() ? 0.5 : 1,
+                }}
+              >
+                Run
+              </button>
+            </div>
+
+            {/* Quick command buttons */}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+              {Object.keys(ALLOWED_COMMANDS).map((cmd) => (
+                <button
+                  key={cmd}
+                  type="button"
+                  onClick={() => setTerminalCmd(cmd)}
+                  style={{
+                    padding: "2px 8px",
+                    fontSize: 9,
+                    fontFamily: "var(--font-mono)",
+                    letterSpacing: "0.08em",
+                    border: "1px solid var(--color-border-default)",
+                    borderRadius: 3,
+                    background: "transparent",
+                    color: "var(--color-text-secondary)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {cmd}
+                </button>
+              ))}
             </div>
           </div>
         </div>
+
+        {/* ── Registered Skills ─────────────────────────── */}
+        {registeredSkills.length > 0 && (
+          <div style={{ marginTop: 20 }}>
+            <div
+              style={{
+                fontSize: 9,
+                letterSpacing: "0.2em",
+                textTransform: "uppercase",
+                color: "var(--color-text-secondary)",
+                marginBottom: 10,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <span>Registered Skills</span>
+              <span style={{ color: "var(--color-teal)" }}>
+                {registeredSkills.length} active
+              </span>
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {registeredSkills.map((skill) => (
+                <div
+                  key={skill.tool_name}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    background: "var(--color-bg-elevated)",
+                    border: "1px solid var(--color-border-default)",
+                    borderRadius: 5,
+                    padding: "8px 12px",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: "50%",
+                      background: skill.enabled
+                        ? "var(--color-green)"
+                        : "var(--color-text-secondary)",
+                      flexShrink: 0,
+                    }}
+                  />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: "var(--color-text-primary)",
+                        letterSpacing: "0.03em",
+                      }}
+                    >
+                      {skill.name}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 9,
+                        color: "var(--color-text-secondary)",
+                        marginTop: 1,
+                      }}
+                    >
+                      {skill.tool_name} · {skill.source} ·{" "}
+                      {skill.description.slice(0, 60)}
+                      {skill.description.length > 60 ? "..." : ""}
+                    </div>
+                  </div>
+                  <span
+                    style={{
+                      fontSize: 8,
+                      padding: "1px 6px",
+                      background:
+                        skill.source === "uploaded"
+                          ? "rgba(0,200,255,0.08)"
+                          : "rgba(0,255,148,0.08)",
+                      border: `1px solid ${skill.source === "uploaded" ? "rgba(0,200,255,0.3)" : "rgba(0,255,148,0.3)"}`,
+                      borderRadius: 3,
+                      color:
+                        skill.source === "uploaded"
+                          ? "var(--color-teal)"
+                          : "var(--color-green)",
+                      letterSpacing: "0.1em",
+                      textTransform: "uppercase",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {skill.source}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeSkill(skill.tool_name)}
+                    style={{
+                      background: "transparent",
+                      border: "1px solid var(--color-border-default)",
+                      borderRadius: 3,
+                      padding: "2px 8px",
+                      fontSize: 9,
+                      color: "var(--color-text-secondary)",
+                      cursor: "pointer",
+                      fontFamily: "var(--font-mono)",
+                      letterSpacing: "0.08em",
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div className="modal-footer">
           <button className="abort-btn" onClick={onClose}>
-            Abort Initialization
+            Close
           </button>
         </div>
       </div>
@@ -470,6 +915,7 @@ function SkillsStudioModal({
   )
 }
 
+// ── Icons ─────────────────────────────────────────────────────────
 function SearchIcon() {
   return (
     <svg
@@ -485,23 +931,6 @@ function SearchIcon() {
         stroke="currentColor"
         strokeWidth="1.2"
         strokeLinecap="round"
-      />
-    </svg>
-  )
-}
-function BellIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-      <path
-        d="M7 1.5A4 4 0 003 5.5V9l-1 1.5h10L11 9V5.5A4 4 0 007 1.5z"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M5.5 11a1.5 1.5 0 003 0"
-        stroke="currentColor"
-        strokeWidth="1.2"
       />
     </svg>
   )
