@@ -8,13 +8,6 @@ import ThemeToggle from "@/components/ThemeToggle"
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 const USER_ID = "operator_01"
 
-const ALLOWED_COMMANDS: Record<string, string> = {
-  list: "List all registered skills",
-  status: "Show skill status",
-  test: "Test skill connectivity",
-  reload: "Reload skill registry",
-}
-
 interface Plugin {
   id: string
   tool_name: string
@@ -140,12 +133,19 @@ export default function PluginsPage() {
   useEffect(() => {
     async function loadInstalled() {
       try {
-        const res = await fetch(`${API_BASE}/plugins/${USER_ID}`)
+        const res = await fetch(`${API_BASE}/plugins/list/${USER_ID}`)
         if (!res.ok) return
-        const data: { tool_name: string; installed: boolean }[] =
-          await res.json()
+        const data: {
+          tool_name: string
+          installed: boolean
+          enabled: boolean
+        }[] = await res.json()
         setInstalledTools(
-          new Set(data.filter((p) => p.installed).map((p) => p.tool_name)),
+          new Set(
+            data
+              .filter((p) => p.installed && p.enabled)
+              .map((p) => p.tool_name),
+          ),
         )
       } catch {}
     }
@@ -155,7 +155,7 @@ export default function PluginsPage() {
   const handleInstall = async (tool_name: string) => {
     setLoadingInstall(tool_name)
     try {
-      const res = await fetch(`${API_BASE}/plugins/${USER_ID}/install`, {
+      const res = await fetch(`${API_BASE}/plugins/install/${USER_ID}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tool_name }),
@@ -170,15 +170,17 @@ export default function PluginsPage() {
   const handleUninstall = async (tool_name: string) => {
     setLoadingInstall(tool_name)
     try {
-      const res = await fetch(`${API_BASE}/plugins/${USER_ID}/${tool_name}`, {
-        method: "DELETE",
-      })
-      if (res.ok)
+      const res = await fetch(
+        `${API_BASE}/plugins/uninstall/${USER_ID}/${tool_name}`,
+        { method: "DELETE" },
+      )
+      if (res.ok) {
         setInstalledTools((prev) => {
           const n = new Set(prev)
           n.delete(tool_name)
           return n
         })
+      }
     } catch {
     } finally {
       setLoadingInstall(null)
@@ -215,6 +217,9 @@ export default function PluginsPage() {
             />
           </div>
           <ThemeToggle />
+          <button className="icon-btn">
+            <GridIcon />
+          </button>
           <button
             className="icon-btn"
             style={{
@@ -256,7 +261,7 @@ export default function PluginsPage() {
           </div>
           <p className="plugins-hero-copy">
             Connect AVA to your entire digital ecosystem. Unlock specialized
-            modules built for high-precision AGI orchestration.
+            modules built for high-precision orchestration.
           </p>
           <div className="plugins-hero-footer">
             <div className="plugins-stats-grid">
@@ -376,7 +381,11 @@ function PluginCard({
 function SkillsStudioModal({ onClose }: { onClose: () => void }) {
   const [terminalCmd, setTerminalCmd] = useState("")
   const [terminalOutput, setTerminalOutput] = useState(
-    "AVA Skill Terminal v1.0\nType 'list', 'status', 'test', or 'reload'\n─────────────────────────────────────\n$ ",
+    "AVA Skill Terminal v2.0\n" +
+      "Install skills from GitHub using npx commands.\n" +
+      "─────────────────────────────────────────────\n" +
+      "Usage: npx skills add <github_url> --skill <name>\n" +
+      "Type 'help' for all commands.\n$ ",
   )
   const [terminalLoading, setTerminalLoading] = useState(false)
   const [dragOver, setDragOver] = useState(false)
@@ -408,6 +417,7 @@ function SkillsStudioModal({ onClose }: { onClose: () => void }) {
     loadSkills()
   }, [])
 
+  // Auto-scroll terminal to bottom
   useEffect(() => {
     if (terminalRef.current) {
       terminalRef.current.scrollTop = terminalRef.current.scrollHeight
@@ -473,6 +483,10 @@ function SkillsStudioModal({ onClose }: { onClose: () => void }) {
       })
       const data = await res.json()
       setTerminalOutput((prev) => prev + data.output + "\n$ ")
+      // Reload skills after any add/remove
+      if (cmd.includes("add") || cmd.includes("remove")) {
+        loadSkills()
+      }
     } catch {
       setTerminalOutput(
         (prev) => prev + "Error: Could not connect to backend.\n$ ",
@@ -497,11 +511,18 @@ function SkillsStudioModal({ onClose }: { onClose: () => void }) {
     } catch {}
   }
 
+  const QUICK_CMDS = [
+    "npx skills list",
+    "npx skills status",
+    "npx skills test",
+    "help",
+  ]
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
         className="modal-box"
-        style={{ width: 900, maxWidth: "95vw" }}
+        style={{ width: 920, maxWidth: "95vw" }}
         onClick={(e) => e.stopPropagation()}
       >
         <button className="modal-close-btn" onClick={onClose} type="button">
@@ -509,12 +530,16 @@ function SkillsStudioModal({ onClose }: { onClose: () => void }) {
         </button>
         <div className="modal-title">Initialize New Skill</div>
         <div className="modal-sub">
-          Register a custom skill from a SKILL.md file or via the terminal.
-          Registered skills become callable tools in every conversation.
+          Register a custom skill from a SKILL.md file or install directly from
+          GitHub using{" "}
+          <code style={{ color: "var(--color-teal)", fontSize: 11 }}>
+            npx skills add
+          </code>
+          . Registered skills become callable tools in every conversation.
         </div>
 
         <div className="modal-options">
-          {/* ── Upload SKILL.MD ───────────────────────────── */}
+          {/* ── Option 1: Upload SKILL.MD ───────────────── */}
           <div
             className="modal-option"
             onDragOver={(e) => {
@@ -540,6 +565,7 @@ function SkillsStudioModal({ onClose }: { onClose: () => void }) {
               will parse and register it automatically.
             </div>
 
+            {/* Dropzone */}
             <div
               className="dropzone"
               style={{
@@ -666,7 +692,7 @@ Ask Ava: "Use my custom tool to..."`}
             </div>
           </div>
 
-          {/* ── Terminal ──────────────────────────────────── */}
+          {/* ── Option 2: Terminal / npx ─────────────────── */}
           <div className="modal-option">
             <div
               className="modal-option-icon"
@@ -679,11 +705,46 @@ Ask Ava: "Use my custom tool to..."`}
             </div>
             <div className="modal-option-title">Load via Skills.sh</div>
             <div className="modal-option-desc">
-              Manage skills via the terminal. List, test, reload, or check
-              status.
+              Install skills directly from GitHub repos using the
+              <code
+                style={{
+                  color: "var(--color-teal)",
+                  fontSize: 10,
+                  margin: "0 4px",
+                }}
+              >
+                npx skills add
+              </code>
+              command.
             </div>
 
-            {/* Output */}
+            {/* Example command hint */}
+            <div
+              style={{
+                fontSize: 9,
+                color: "var(--color-text-secondary)",
+                letterSpacing: "0.02em",
+                lineHeight: 1.6,
+                padding: "6px 10px",
+                background: "var(--color-bg-void)",
+                borderRadius: 4,
+                border: "1px solid var(--color-border-subtle)",
+                marginBottom: 8,
+                fontFamily: "var(--font-mono)",
+              }}
+            >
+              <span style={{ color: "var(--color-teal-dim)" }}>$</span>{" "}
+              <span style={{ color: "var(--color-text-primary)" }}>
+                npx skills add
+              </span>{" "}
+              <span style={{ color: "#a8d8a8" }}>
+                https://github.com/user/repo
+              </span>{" "}
+              <span style={{ color: "#7ab0e0" }}>--skill</span>{" "}
+              <span style={{ color: "#f0c080" }}>skill-name</span>
+            </div>
+
+            {/* Terminal output */}
             <div
               ref={terminalRef}
               style={{
@@ -696,7 +757,7 @@ Ask Ava: "Use my custom tool to..."`}
                 color: "var(--color-text-secondary)",
                 lineHeight: 1.7,
                 marginBottom: 6,
-                height: 140,
+                height: 150,
                 overflowY: "auto",
                 whiteSpace: "pre-wrap",
                 wordBreak: "break-word",
@@ -708,7 +769,7 @@ Ask Ava: "Use my custom tool to..."`}
               )}
             </div>
 
-            {/* Input */}
+            {/* Terminal input */}
             <div
               style={{
                 display: "flex",
@@ -734,7 +795,7 @@ Ask Ava: "Use my custom tool to..."`}
                 value={terminalCmd}
                 onChange={(e) => setTerminalCmd(e.target.value)}
                 onKeyDown={handleTerminalKey}
-                placeholder="Type a command..."
+                placeholder="npx skills add <github_url> --skill <name>"
                 disabled={terminalLoading}
                 style={{
                   flex: 1,
@@ -744,6 +805,7 @@ Ask Ava: "Use my custom tool to..."`}
                   color: "var(--color-text-primary)",
                   fontFamily: "var(--font-mono)",
                   fontSize: 10,
+                  letterSpacing: "0.02em",
                 }}
               />
               <button
@@ -751,7 +813,7 @@ Ask Ava: "Use my custom tool to..."`}
                 onClick={handleTerminalSubmit}
                 disabled={terminalLoading || !terminalCmd.trim()}
                 style={{
-                  padding: "2px 10px",
+                  padding: "2px 12px",
                   fontFamily: "var(--font-mono)",
                   fontSize: 9,
                   letterSpacing: "0.1em",
@@ -762,15 +824,16 @@ Ask Ava: "Use my custom tool to..."`}
                   color: "var(--color-teal)",
                   cursor: terminalLoading ? "default" : "pointer",
                   opacity: terminalLoading || !terminalCmd.trim() ? 0.5 : 1,
+                  flexShrink: 0,
                 }}
               >
                 Run
               </button>
             </div>
 
-            {/* Quick command buttons */}
+            {/* Quick command chips */}
             <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-              {Object.keys(ALLOWED_COMMANDS).map((cmd) => (
+              {QUICK_CMDS.map((cmd) => (
                 <button
                   key={cmd}
                   type="button"
@@ -779,12 +842,13 @@ Ask Ava: "Use my custom tool to..."`}
                     padding: "2px 8px",
                     fontSize: 9,
                     fontFamily: "var(--font-mono)",
-                    letterSpacing: "0.08em",
+                    letterSpacing: "0.06em",
                     border: "1px solid var(--color-border-default)",
                     borderRadius: 3,
                     background: "transparent",
                     color: "var(--color-text-secondary)",
                     cursor: "pointer",
+                    transition: "all 0.15s",
                   }}
                 >
                   {cmd}
@@ -856,9 +920,16 @@ Ask Ava: "Use my custom tool to..."`}
                         marginTop: 1,
                       }}
                     >
-                      {skill.tool_name} · {skill.source} ·{" "}
-                      {skill.description.slice(0, 60)}
-                      {skill.description.length > 60 ? "..." : ""}
+                      {skill.tool_name}
+                      {" · "}
+                      {skill.source.startsWith("http")
+                        ? skill.source
+                            .replace(
+                              "https://raw.githubusercontent.com/",
+                              "gh/",
+                            )
+                            .slice(0, 45) + "..."
+                        : skill.source}
                     </div>
                   </div>
                   <span
@@ -868,19 +939,34 @@ Ask Ava: "Use my custom tool to..."`}
                       background:
                         skill.source === "uploaded"
                           ? "rgba(0,200,255,0.08)"
-                          : "rgba(0,255,148,0.08)",
-                      border: `1px solid ${skill.source === "uploaded" ? "rgba(0,200,255,0.3)" : "rgba(0,255,148,0.3)"}`,
+                          : skill.source.startsWith("http")
+                            ? "rgba(255,107,53,0.08)"
+                            : "rgba(0,255,148,0.08)",
+                      border: `1px solid ${
+                        skill.source === "uploaded"
+                          ? "rgba(0,200,255,0.3)"
+                          : skill.source.startsWith("http")
+                            ? "rgba(255,107,53,0.3)"
+                            : "rgba(0,255,148,0.3)"
+                      }`,
                       borderRadius: 3,
                       color:
                         skill.source === "uploaded"
                           ? "var(--color-teal)"
-                          : "var(--color-green)",
+                          : skill.source.startsWith("http")
+                            ? "var(--color-orange)"
+                            : "var(--color-green)",
                       letterSpacing: "0.1em",
                       textTransform: "uppercase",
                       whiteSpace: "nowrap",
+                      flexShrink: 0,
                     }}
                   >
-                    {skill.source}
+                    {skill.source === "uploaded"
+                      ? "uploaded"
+                      : skill.source.startsWith("http")
+                        ? "github"
+                        : skill.source}
                   </span>
                   <button
                     type="button"
@@ -895,6 +981,8 @@ Ask Ava: "Use my custom tool to..."`}
                       cursor: "pointer",
                       fontFamily: "var(--font-mono)",
                       letterSpacing: "0.08em",
+                      flexShrink: 0,
+                      transition: "all 0.15s",
                     }}
                   >
                     Remove

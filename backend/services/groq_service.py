@@ -144,6 +144,8 @@ async def stream_chat(
     user_id: str = "operator_01",
     installed_plugins: list[str] | None = None,
     tone: str = "balanced",
+    dynamic_handlers: dict | None = None,
+    dynamic_schemas: dict | None = None,
 ) -> AsyncGenerator[dict, None]:
     """
     The main agentic loop with multi-model fallback cascade.
@@ -155,7 +157,9 @@ async def stream_chat(
         for name in (installed_plugins or [])
         if name in PLUGIN_TOOL_SCHEMAS
     ]
-    all_tool_schemas = TOOL_SCHEMAS + active_plugin_schemas
+
+    dynamic_schema_list = list((dynamic_schemas or {}).values())
+    all_tool_schemas = TOOL_SCHEMAS + active_plugin_schemas + dynamic_schema_list
 
     all_handlers = {
         **TOOL_HANDLERS,
@@ -164,6 +168,7 @@ async def stream_chat(
             for name in (installed_plugins or [])
             if name in PLUGIN_HANDLERS
         },
+        **(dynamic_handlers or {}),
     }
 
     # ── Trim history ──────────────────────────────────────────────

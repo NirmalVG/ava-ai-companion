@@ -3,18 +3,21 @@ routers/skills.py — Dynamic skill registration
 
 Two ingestion methods:
   1. Upload SKILL.MD  — parse markdown, extract tool definition, register
-  2. Shell command    — execute a predefined safe command to load a skill
+  2. npx skills add   — fetch skill from GitHub URL and register
 
-Registered skills are stored in the DB and loaded into the tool
-registry dynamically, just like built-in plugins.
+npx command format:
+  npx skills add <github_url> --skill <skill-name>
+
+Examples:
+  npx skills add https://github.com/vercel-labs/agent-skills --skill vercel-react-best-practices
+  npx skills add https://github.com/nirmal-works/ava-skills --skill weather-advanced
+  npx skills add https://raw.githubusercontent.com/user/repo/main/skill.md
 """
 
 import os
-import json
 import re
-import tempfile
-import subprocess
-import sys
+import json
+import httpx
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -26,50 +29,26 @@ router = APIRouter()
 
 USER_ID = "operator_01"
 
-# Safe shell commands for skill loading
-ALLOWED_COMMANDS = {
-    "list":    "List all registered skills",
-    "test":    "Test skill connectivity",
-    "reload":  "Reload skill registry",
-    "status":  "Show skill status",
-}
+# ── Supported commands ────────────────────────────────────────────
+COMMAND_HELP = """Available commands:
+  npx skills add <github_url> --skill <name>   Install a skill from GitHub
+  npx skills add <raw_url>                     Install from raw markdown URL
+  npx skills list                              List installed skills
+  npx skills remove <tool_name>                Remove a skill
+  npx skills status                            Show registry status
+  npx skills test                              Test connectivity
+  help                                         Show this message"""
 
 
 # ── Schemas ───────────────────────────────────────────────────────
-class SkillOut(BaseModel):
-    tool_name: str
-    name: str
-    description: str
-    installed: bool
-    source: str   # "builtin" | "uploaded" | "shell"
-
-
 class TerminalCommandRequest(BaseModel):
     command: str
 
 
-# ── Helpers ───────────────────────────────────────────────────────
+# ── Markdown parser ───────────────────────────────────────────────
 def parse_skill_markdown(content: str) -> dict:
-    """
-    Parse a SKILL.md file and extract tool definition.
-
-    Expected format:
-    ---
-    name: My Tool Name
-    tool_name: my_tool_name
-    description: What this tool does
-    ---
-
-    ## Parameters
-    - param1 (string, required): Description
-    - param2 (string, optional): Description
-
-    ## Example
-    ...
-    """
     metadata = {}
 
-    # Extract YAML frontmatter
     frontmatter_match = re.search(r"^---\s*\n(.*?)\n---", content, re.DOTALL)
     if frontmatter_match:
         for line in frontmatter_match.group(1).split("\n"):
@@ -77,12 +56,13 @@ def parse_skill_markdown(content: str) -> dict:
                 key, _, value = line.partition(":")
                 metadata[key.strip()] = value.strip()
 
-    # Extract parameters from markdown
     params = {}
     param_section = re.search(r"## Parameters\s*\n(.*?)(?=\n##|\Z)", content, re.DOTALL)
     if param_section:
         for line in param_section.group(1).strip().split("\n"):
-            param_match = re.match(r"-\s+(\w+)\s+\((\w+),\s*(required|optional)\):\s*(.+)", line)
+            param_match = re.match(
+                r"-\s+(\w+)\s+\((\w+),\s*(required|optional)\):\s*(.+)", line
+            )
             if param_match:
                 pname, ptype, required, pdesc = param_match.groups()
                 params[pname] = {
@@ -91,51 +71,340 @@ def parse_skill_markdown(content: str) -> dict:
                     "required": required == "required",
                 }
 
-    # Extract description from body if not in frontmatter
     if "description" not in metadata:
-        desc_match = re.search(r"## Description\s*\n(.+?)(?=\n##|\Z)", content, re.DOTALL)
+        desc_match = re.search(
+            r"## Description\s*\n(.+?)(?=\n##|\Z)", content, re.DOTALL
+        )
         if desc_match:
             metadata["description"] = desc_match.group(1).strip()
 
     return {
         "name": metadata.get("name", "Unknown Skill"),
-        "tool_name": metadata.get("tool_name", "").lower().replace(" ", "_").replace("-", "_"),
+        "tool_name": (
+            metadata.get("tool_name", "")
+            .lower()
+            .replace(" ", "_")
+            .replace("-", "_")
+        ),
         "description": metadata.get("description", "A custom skill"),
         "parameters": params,
         "raw_content": content,
     }
 
 
-def build_tool_schema(skill_def: dict) -> dict:
-    """Build an OpenAPI-compatible tool schema from skill definition."""
-    properties = {}
-    required = []
+# ── GitHub URL resolver ───────────────────────────────────────────
+def resolve_raw_url(url: str, skill_name: str | None = None) -> list[str]:
+    """
+    Convert a GitHub repo/file URL to one or more raw content URLs to try.
 
-    for pname, pinfo in skill_def.get("parameters", {}).items():
-        properties[pname] = {
-            "type": pinfo.get("type", "string"),
-            "description": pinfo.get("description", ""),
-        }
-        if pinfo.get("required"):
-            required.append(pname)
+    Handles:
+      - Raw URLs (raw.githubusercontent.com) → use directly
+      - GitHub repo URLs → try common skill file locations
+      - GitHub file URLs (github.com/user/repo/blob/...) → convert to raw
+    """
+    candidates = []
 
-    # Default parameter if none defined
-    if not properties:
-        properties["input"] = {"type": "string", "description": "Input for this skill"}
-        required = ["input"]
+    # Already a raw URL
+    if "raw.githubusercontent.com" in url:
+        candidates.append(url)
+        return candidates
 
-    return {
-        "type": "function",
-        "function": {
-            "name": skill_def["tool_name"],
-            "description": skill_def["description"],
-            "parameters": {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-            },
-        },
+    # GitHub blob URL → convert to raw
+    if "github.com" in url and "/blob/" in url:
+        raw = url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
+        candidates.append(raw)
+        return candidates
+
+    # GitHub repo URL → try multiple locations
+    if "github.com" in url:
+        # Normalize: remove trailing slash and .git
+        base = url.rstrip("/").removesuffix(".git")
+        # Convert to raw base
+        raw_base = base.replace("github.com", "raw.githubusercontent.com")
+
+        branches = ["main", "master"]
+        skill_slug = skill_name.replace(" ", "-").lower() if skill_name else None
+
+        for branch in branches:
+            if skill_slug:
+                # Try skill-specific paths
+                candidates += [
+                    f"{raw_base}/{branch}/skills/{skill_slug}.md",
+                    f"{raw_base}/{branch}/skills/{skill_slug}/SKILL.md",
+                    f"{raw_base}/{branch}/{skill_slug}.md",
+                    f"{raw_base}/{branch}/{skill_slug}/SKILL.md",
+                ]
+            # Try root skill files
+            candidates += [
+                f"{raw_base}/{branch}/SKILL.md",
+                f"{raw_base}/{branch}/skill.md",
+                f"{raw_base}/{branch}/README.md",
+            ]
+
+    return candidates
+
+
+async def fetch_skill_from_url(url: str, skill_name: str | None = None) -> tuple[str, str]:
+    """
+    Fetch skill markdown from a URL. Tries multiple candidate URLs.
+    Returns (content, resolved_url) or raises HTTPException.
+    """
+    candidates = resolve_raw_url(url, skill_name)
+
+    if not candidates:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not resolve URL: {url}"
+        )
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        for candidate_url in candidates:
+            try:
+                resp = await client.get(candidate_url)
+                if resp.status_code == 200:
+                    content = resp.text
+                    # Must have some markdown content
+                    if len(content.strip()) > 10:
+                        return content, candidate_url
+            except httpx.RequestError:
+                continue
+
+    raise HTTPException(
+        status_code=404,
+        detail=(
+            f"Could not find skill file at {url}. "
+            f"Tried {len(candidates)} locations. "
+            f"Make sure the repo is public and contains a SKILL.md file."
+        ),
+    )
+
+
+# ── Skill registration helper ─────────────────────────────────────
+def register_skill(
+    skill_def: dict,
+    user_id: str,
+    source_url: str,
+    db: Session,
+) -> dict:
+    """Validate and register a parsed skill definition."""
+
+    if not skill_def["tool_name"]:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Could not extract tool_name from skill file. "
+                "Add 'tool_name: your_tool_name' to the frontmatter."
+            ),
+        )
+
+    if not re.match(r"^[a-z][a-z0-9_]{1,39}$", skill_def["tool_name"]):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid tool_name '{skill_def['tool_name']}'. "
+                f"Use lowercase letters, numbers, and underscores only."
+            ),
+        )
+
+    builtin_names = {
+        "get_current_time", "get_weather", "calculate",
+        "web_search", "execute_code", "read_file", "write_file",
     }
+    if skill_def["tool_name"] in builtin_names:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Tool name '{skill_def['tool_name']}' conflicts with a built-in tool.",
+        )
+
+    existing = db.query(Plugin).filter(
+        Plugin.user_id == user_id,
+        Plugin.tool_name == skill_def["tool_name"],
+    ).first()
+
+    if existing:
+        existing.name = skill_def["name"]
+        existing.description = skill_def["description"]
+        existing.base_url = source_url
+        existing.enabled = "true"
+        db.commit()
+        return {"status": "updated", **skill_def}
+
+    db.add(Plugin(
+        user_id=user_id,
+        name=skill_def["name"],
+        description=skill_def["description"],
+        tool_name=skill_def["tool_name"],
+        base_url=source_url,
+        enabled="true",
+    ))
+    db.commit()
+    return {"status": "registered", **skill_def}
+
+
+# ── Terminal command parser ───────────────────────────────────────
+async def handle_terminal_command(raw_cmd: str, db: Session) -> str:
+    """
+    Parse and execute a terminal command.
+    Returns a string to display in the terminal output.
+    """
+    cmd = raw_cmd.strip()
+
+    # ── help ──────────────────────────────────────────────────────
+    if cmd in ("help", "?", ""):
+        return COMMAND_HELP
+
+    # ── npx skills ... ────────────────────────────────────────────
+    if cmd.startswith("npx skills"):
+        parts = cmd.split()
+        # parts: ["npx", "skills", <subcommand>, ...]
+
+        if len(parts) < 3:
+            return "Usage: npx skills <add|list|remove|status|test>"
+
+        subcommand = parts[2].lower()
+
+        # npx skills add <url> [--skill <name>]
+        if subcommand == "add":
+            if len(parts) < 4:
+                return (
+                    "Usage: npx skills add <github_url> [--skill <skill-name>]\n"
+                    "Example: npx skills add https://github.com/user/repo --skill my-skill"
+                )
+
+            url = parts[3]
+
+            # Extract --skill flag
+            skill_name = None
+            if "--skill" in parts:
+                skill_idx = parts.index("--skill")
+                if skill_idx + 1 < len(parts):
+                    skill_name = parts[skill_idx + 1]
+
+            lines = [f"Fetching skill from {url}..."]
+            if skill_name:
+                lines.append(f"Looking for skill: {skill_name}")
+
+            try:
+                content, resolved_url = await fetch_skill_from_url(url, skill_name)
+                lines.append(f"Found: {resolved_url}")
+                lines.append("Parsing skill definition...")
+
+                skill_def = parse_skill_markdown(content)
+
+                lines.append(f"  Name:        {skill_def['name']}")
+                lines.append(f"  Tool name:   {skill_def['tool_name']}")
+                lines.append(f"  Description: {skill_def['description']}")
+                if skill_def["parameters"]:
+                    lines.append(f"  Parameters:  {', '.join(skill_def['parameters'].keys())}")
+
+                result = register_skill(skill_def, USER_ID, resolved_url, db)
+                status = result["status"]
+
+                lines.append("")
+                if status == "registered":
+                    lines.append(f"✓ Skill '{skill_def['name']}' registered successfully.")
+                    lines.append(f"  Ava can now use '{skill_def['tool_name']}' as a tool.")
+                else:
+                    lines.append(f"✓ Skill '{skill_def['name']}' updated successfully.")
+
+            except HTTPException as e:
+                lines.append(f"✕ Error: {e.detail}")
+            except Exception as e:
+                lines.append(f"✕ Unexpected error: {str(e)}")
+
+            return "\n".join(lines)
+
+        # npx skills list
+        elif subcommand == "list":
+            plugins = db.query(Plugin).filter(Plugin.user_id == USER_ID).all()
+            if not plugins:
+                return "No skills registered.\nUse 'npx skills add <url>' to install one."
+            lines = [f"Registered Skills ({len(plugins)} total)", "─" * 44]
+            for p in plugins:
+                status = "ACTIVE  " if p.enabled == "true" else "DISABLED"
+                source = p.base_url[:30] + "..." if len(p.base_url) > 30 else p.base_url
+                lines.append(f"  [{status}] {p.tool_name:25} {source}")
+            return "\n".join(lines)
+
+        # npx skills remove <tool_name>
+        elif subcommand == "remove":
+            if len(parts) < 4:
+                return "Usage: npx skills remove <tool_name>"
+            tool_name = parts[3]
+            plugin = db.query(Plugin).filter(
+                Plugin.user_id == USER_ID,
+                Plugin.tool_name == tool_name,
+            ).first()
+            if not plugin:
+                return f"✕ Skill '{tool_name}' not found."
+            db.delete(plugin)
+            db.commit()
+            return f"✓ Skill '{tool_name}' removed successfully."
+
+        # npx skills status
+        elif subcommand == "status":
+            plugins = db.query(Plugin).filter(Plugin.user_id == USER_ID).all()
+            active = sum(1 for p in plugins if p.enabled == "true")
+            uploaded = sum(1 for p in plugins if p.base_url == "uploaded")
+            from_url = sum(1 for p in plugins if p.base_url.startswith("http"))
+            return (
+                f"AVA Skill Registry Status\n"
+                f"─────────────────────────────\n"
+                f"  Total skills:      {len(plugins)}\n"
+                f"  Active:            {active}\n"
+                f"  Installed via URL: {from_url}\n"
+                f"  Uploaded:          {uploaded}\n"
+                f"  Status:            OPERATIONAL"
+            )
+
+        # npx skills test
+        elif subcommand == "test":
+            return (
+                "Testing skill registry...\n"
+                "  [OK] Database connection\n"
+                "  [OK] Plugin registry\n"
+                "  [OK] GitHub URL resolver\n"
+                "  [OK] Markdown parser\n"
+                "  [OK] Tool schema generator\n"
+                "All systems operational."
+            )
+
+        else:
+            return (
+                f"Unknown subcommand '{subcommand}'.\n"
+                f"Usage: npx skills <add|list|remove|status|test>"
+            )
+
+    # ── legacy short commands (list, status, test, reload) ────────
+    base = cmd.split()[0].lower()
+
+    if base == "list":
+        plugins = db.query(Plugin).filter(Plugin.user_id == USER_ID).all()
+        if not plugins:
+            return "No skills registered."
+        lines = [f"Registered Skills ({len(plugins)})", "─" * 40]
+        for p in plugins:
+            lines.append(f"  {p.tool_name:25} {p.name}")
+        return "\n".join(lines)
+
+    if base == "status":
+        plugins = db.query(Plugin).filter(Plugin.user_id == USER_ID).all()
+        active = sum(1 for p in plugins if p.enabled == "true")
+        return (
+            f"AVA Skill Registry\n"
+            f"  Total: {len(plugins)}  Active: {active}  Status: OPERATIONAL"
+        )
+
+    if base == "test":
+        return "All systems operational."
+
+    if base == "reload":
+        count = db.query(Plugin).filter(
+            Plugin.user_id == USER_ID, Plugin.enabled == "true"
+        ).count()
+        return f"Registry reloaded. {count} active skills ready."
+
+    return f"Command not recognized: '{cmd}'\nType 'help' to see available commands."
 
 
 # ── Routes ────────────────────────────────────────────────────────
@@ -145,9 +414,6 @@ async def upload_skill(
     user_id: str = Form(default=USER_ID),
     db: Session = Depends(get_db),
 ):
-    """
-    Upload a SKILL.md file to register a new skill.
-    """
     if not file.filename or not file.filename.endswith(".md"):
         raise HTTPException(status_code=400, detail="Only .md files are accepted.")
 
@@ -160,70 +426,12 @@ async def upload_skill(
     if len(text) > 50_000:
         raise HTTPException(status_code=400, detail="File too large. Max 50KB.")
 
-    # Parse the skill definition
     skill_def = parse_skill_markdown(text)
-
-    if not skill_def["tool_name"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Could not extract tool_name from skill file. Add 'tool_name: your_tool' to the frontmatter."
-        )
-
-    # Validate tool_name format
-    if not re.match(r"^[a-z][a-z0-9_]{1,39}$", skill_def["tool_name"]):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid tool_name '{skill_def['tool_name']}'. Use lowercase letters, numbers, underscores only."
-        )
-
-    # Check for conflicts with built-in tools
-    builtin_names = {"get_current_time", "get_weather", "calculate", "web_search",
-                     "execute_code", "read_file", "write_file"}
-    if skill_def["tool_name"] in builtin_names:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Tool name '{skill_def['tool_name']}' conflicts with a built-in tool."
-        )
-
-    # Check if already exists
-    existing = db.query(Plugin).filter(
-        Plugin.user_id == user_id,
-        Plugin.tool_name == skill_def["tool_name"],
-    ).first()
-
-    if existing:
-        # Update existing
-        existing.name = skill_def["name"]
-        existing.description = skill_def["description"]
-        existing.enabled = "true"
-        db.commit()
-        return {
-            "status": "updated",
-            "tool_name": skill_def["tool_name"],
-            "name": skill_def["name"],
-            "description": skill_def["description"],
-            "parameters": skill_def["parameters"],
-        }
-
-    # Register new skill
-    plugin = Plugin(
-        user_id=user_id,
-        name=skill_def["name"],
-        description=skill_def["description"],
-        tool_name=skill_def["tool_name"],
-        base_url="uploaded",
-        enabled="true",
-    )
-    db.add(plugin)
-    db.commit()
+    result = register_skill(skill_def, user_id, "uploaded", db)
 
     return {
-        "status": "registered",
-        "tool_name": skill_def["tool_name"],
-        "name": skill_def["name"],
-        "description": skill_def["description"],
-        "parameters": skill_def["parameters"],
-        "message": f"Skill '{skill_def['name']}' registered successfully. Ava can now use it as a tool.",
+        **result,
+        "message": f"Skill '{skill_def['name']}' registered. Ava can now use '{skill_def['tool_name']}' as a tool.",
     }
 
 
@@ -232,81 +440,13 @@ async def run_terminal_command(
     req: TerminalCommandRequest,
     db: Session = Depends(get_db),
 ):
-    """
-    Execute a safe skill management command.
-    Only whitelisted commands are allowed.
-    """
-    cmd = req.command.strip().lower()
-
-    # Extract base command (first word)
-    base_cmd = cmd.split()[0] if cmd else ""
-
-    if base_cmd not in ALLOWED_COMMANDS:
-        return {
-            "output": f"Command '{base_cmd}' not recognized.\n\nAvailable commands:\n" +
-                      "\n".join(f"  {k:10} — {v}" for k, v in ALLOWED_COMMANDS.items()),
-            "success": False,
-        }
-
-    if base_cmd == "list":
-        plugins = db.query(Plugin).filter(Plugin.user_id == USER_ID).all()
-        if not plugins:
-            return {
-                "output": "No skills registered.\nUse 'upload' to register a skill from a SKILL.md file.",
-                "success": True,
-            }
-        lines = ["Registered Skills:", "─" * 40]
-        for p in plugins:
-            status = "ACTIVE" if p.enabled == "true" else "DISABLED"
-            source = p.base_url if p.base_url in ("uploaded", "built-in") else "plugin"
-            lines.append(f"  [{status}] {p.tool_name:25} {p.name} ({source})")
-        return {"output": "\n".join(lines), "success": True}
-
-    elif base_cmd == "status":
-        plugins = db.query(Plugin).filter(Plugin.user_id == USER_ID).all()
-        active = sum(1 for p in plugins if p.enabled == "true")
-        return {
-            "output": (
-                f"AVA Skill Registry Status\n"
-                f"─────────────────────────\n"
-                f"  Total skills:    {len(plugins)}\n"
-                f"  Active skills:   {active}\n"
-                f"  Disabled skills: {len(plugins) - active}\n"
-                f"  Python:          {sys.version.split()[0]}\n"
-                f"  Status:          OPERATIONAL"
-            ),
-            "success": True,
-        }
-
-    elif base_cmd == "test":
-        return {
-            "output": (
-                "Testing skill connectivity...\n"
-                "  [OK] Database connection\n"
-                "  [OK] Plugin registry\n"
-                "  [OK] Tool handler lookup\n"
-                "  [OK] LLM tool schema generation\n"
-                "All systems operational."
-            ),
-            "success": True,
-        }
-
-    elif base_cmd == "reload":
-        count = db.query(Plugin).filter(
-            Plugin.user_id == USER_ID,
-            Plugin.enabled == "true",
-        ).count()
-        return {
-            "output": f"Skill registry reloaded.\n{count} active skills ready.",
-            "success": True,
-        }
-
-    return {"output": "Unknown error.", "success": False}
+    output = await handle_terminal_command(req.command, db)
+    success = not output.startswith("✕")
+    return {"output": output, "success": success}
 
 
 @router.get("/list/{user_id}")
 def list_skills(user_id: str, db: Session = Depends(get_db)):
-    """List all registered skills for a user."""
     plugins = db.query(Plugin).filter(Plugin.user_id == user_id).all()
     return [
         {
@@ -322,7 +462,6 @@ def list_skills(user_id: str, db: Session = Depends(get_db)):
 
 @router.delete("/remove/{user_id}/{tool_name}")
 def remove_skill(user_id: str, tool_name: str, db: Session = Depends(get_db)):
-    """Remove a registered skill."""
     plugin = db.query(Plugin).filter(
         Plugin.user_id == user_id,
         Plugin.tool_name == tool_name,

@@ -915,7 +915,7 @@ export default function ChatPage() {
             }}
           />
 
-          <div className="chat-input-area">
+          <div className="chat-input-area" style={{ padding: "8px 12px 12px" }}>
             <div
               className={`chat-input-box ${pendingImageUrl ? "has-image" : ""}`}
             >

@@ -1,21 +1,14 @@
 """
 routers/context.py — Live context panel data
-
-Returns everything the right panel needs in one call:
-  - Active tools (core + installed plugins)
-  - Recent memory entries
-  - Installed plugins with status
-  - System stats
 """
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from datetime import datetime, timezone
 
 from database import get_db
 from models import MemoryEntry, Plugin, Conversation
 from services.tool_registry import TOOL_HANDLERS
-from services.plugin_registry import PLUGIN_SCHEMAS
+from services.plugin_registry import BUILTIN_PLUGIN_SCHEMAS
 
 router = APIRouter()
 
@@ -24,26 +17,19 @@ USER_ID = "operator_01"
 
 @router.get("/{user_id}")
 def get_context(user_id: str, db: Session = Depends(get_db)):
-    """
-    Returns live context data for the right panel.
-    Single endpoint so the frontend makes one request.
-    """
 
-    # ── Active core tools ─────────────────────────────────────────
+    # ── Core tools ────────────────────────────────────────────────
     core_tools = [
-        {
-            "name": name,
-            "type": "core",
-            "status": "ready",
-        }
+        {"name": name, "type": "core", "status": "ready"}
         for name in TOOL_HANDLERS.keys()
     ]
 
-    # ── Installed plugins ─────────────────────────────────────────
-    installed_db = db.query(Plugin).filter(
-        Plugin.user_id == user_id,
-        Plugin.enabled == "true",
-    ).all()
+    # ── ALL installed plugins from DB (built-in + dynamic) ────────
+    installed_db = (
+        db.query(Plugin)
+        .filter(Plugin.user_id == user_id, Plugin.enabled == "true")
+        .all()
+    )
 
     installed_plugins = [
         {
@@ -51,11 +37,15 @@ def get_context(user_id: str, db: Session = Depends(get_db)):
             "tool_name": p.tool_name,
             "type": "plugin",
             "status": "active",
+            "source": p.base_url,
         }
         for p in installed_db
     ]
 
-    all_tools = core_tools + installed_plugins
+    all_tools = core_tools + [
+        {"name": p["tool_name"], "type": "plugin", "status": "active"}
+        for p in installed_plugins
+    ]
 
     # ── Recent memories ───────────────────────────────────────────
     recent_memories = (
@@ -92,21 +82,9 @@ def get_context(user_id: str, db: Session = Depends(get_db)):
         else "—"
     )
 
-    # ── Plugin catalogue for display ──────────────────────────────
-    available_plugins = [
-        {
-            "tool_name": p["tool_name"],
-            "name": p["name"],
-            "description": p["description"],
-        }
-        for p in PLUGIN_SCHEMAS
-    ]
-
-    # ── Memory counts by type ─────────────────────────────────────
+    # ── Memory counts ─────────────────────────────────────────────
     total_memories = (
-        db.query(MemoryEntry)
-        .filter(MemoryEntry.user_id == user_id)
-        .count()
+        db.query(MemoryEntry).filter(MemoryEntry.user_id == user_id).count()
     )
     preference_count = (
         db.query(MemoryEntry)
@@ -123,6 +101,28 @@ def get_context(user_id: str, db: Session = Depends(get_db)):
         .filter(MemoryEntry.user_id == user_id, MemoryEntry.type == "event")
         .count()
     )
+
+    # ── Available plugin catalogue ────────────────────────────────
+    # Built-ins + any dynamic skills registered in DB
+    builtin_names = {p["tool_name"] for p in BUILTIN_PLUGIN_SCHEMAS}
+    dynamic_skills = [
+        {
+            "tool_name": p.tool_name,
+            "name": p.name,
+            "description": p.description,
+        }
+        for p in installed_db
+        if p.tool_name not in builtin_names
+    ]
+
+    available_plugins = [
+        {
+            "tool_name": p["tool_name"],
+            "name": p["name"],
+            "description": p["description"],
+        }
+        for p in BUILTIN_PLUGIN_SCHEMAS
+    ] + dynamic_skills
 
     return {
         "tools": all_tools,
