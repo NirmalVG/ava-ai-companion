@@ -6,6 +6,8 @@ import { SidebarTrigger } from "@/components/ui/sidebar"
 import { useVoiceInput } from "@/hooks/useVoiceInput"
 import { useContextPanel } from "@/components/ShellProvider"
 import ThemeToggle from "@/components/ThemeToggle"
+import SearchOverlay from "@/components/SearchOverlay"
+import { useSearch } from "@/hooks/useSearch"
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 const USER_ID = "operator_01"
@@ -82,6 +84,8 @@ export default function ChatPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const { contextOpen, setContextOpen } = useContextPanel()
+  const { searchQuery, isSearchOpen, handleSearchChange, closeSearch } =
+    useSearch()
 
   const { voiceState, interimText, toggleListening, isUnsupported } =
     useVoiceInput({
@@ -505,8 +509,19 @@ export default function ChatPage() {
         <div className="header-actions">
           <div className="header-search">
             <SearchIcon />
-            <input placeholder="CMD_SEARCH..." />
+            <input
+              placeholder="CMD_SEARCH..."
+              value={searchQuery}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              onFocus={(e) => {
+                if (e.target.value.length >= 2)
+                  handleSearchChange(e.target.value)
+              }}
+            />
           </div>
+          {isSearchOpen && (
+            <SearchOverlay query={searchQuery} onClose={closeSearch} />
+          )}
           <button
             className="icon-btn"
             title="Clear conversation"
